@@ -1,20 +1,18 @@
-# setup.py
-
 from setuptools import setup, find_packages
+
+# Read requirements from the file
+with open('voxlab/requirements.txt') as f:
+    requirements = f.read().splitlines()
 
 setup(
     name='voxlab',
     version='0.1',
     packages=find_packages(),
     py_modules=['voxlab'],
-    install_requires=[
-        # List your dependencies here, for example:
-        # 'numpy',
-        # 'scipy',
-    ],
+    install_requires=requirements,
     entry_points={
         'console_scripts': [
-            # Define any command line scripts here
+            
         ],
     },
     author='Rafaello Virgilli',
