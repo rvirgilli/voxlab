@@ -1,0 +1,8 @@
+torch>=2.8.0
+torchaudio>=2.8.0
+scipy>=1.16.2
+numpy>=2.1.2
+pytest>=8.4.2
+# ML dependencies for embedding extraction (coming soon)
+# huggingface_hub>=0.10.0
+# transformers>=4.0.0

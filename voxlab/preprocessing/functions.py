@@ -4,32 +4,39 @@ from ..core.audio_samples import AudioSamples
 import torch
 from torchaudio import transforms as T
 
-def resample_audio(audio: AudioSamples, new_sample_rate: int) -> AudioSamples:
+def resample_audio(audio: AudioSamples, new_sample_rate: int, inplace: bool = True) -> AudioSamples:
     """
     Resamples an AudioSamples object to the new sample rate using torchaudio.
 
     Parameters:
     audio (AudioSamples): The audio to resample.
     new_sample_rate (int): The target sample rate.
+    inplace (bool): If True, modifies the audio in-place. If False, returns a new AudioSamples instance.
 
     Returns:
     AudioSamples: The resampled audio.
     """
-    # Create a resampler
-    resampler = T.Resample(audio.sample_rate, new_sample_rate)
+    # Create a resampler and move it to the same device as audio
+    resampler = T.Resample(audio.sample_rate, new_sample_rate).to(audio.device)
 
     # Resample the audio
     resampled_audio = resampler(audio.to_tensor())
 
-    return AudioSamples(resampled_audio, new_sample_rate)
+    if inplace:
+        audio.audio_data = resampled_audio
+        audio.sample_rate = new_sample_rate
+        return audio
+    else:
+        return AudioSamples(resampled_audio, new_sample_rate)
 
-def convert_to_mono(audio: AudioSamples, method='left') -> AudioSamples:
+def convert_to_mono(audio: AudioSamples, method='left', inplace: bool = True) -> AudioSamples:
     """
     Converts stereo audio to mono.
 
     Parameters:
     audio (Audio): The audio to convert.
     method (str): The method to convert to mono ('left' or 'right').
+    inplace (bool): If True, modifies the audio in-place. If False, returns a new AudioSamples instance.
 
     Returns:
     Audio: The mono audio.
@@ -50,9 +57,13 @@ def convert_to_mono(audio: AudioSamples, method='left') -> AudioSamples:
     else:
         raise ValueError(f"Unsupported method: {method}. Use 'left' or 'right'.")
 
-    return AudioSamples(mono_audio, audio.sample_rate)
+    if inplace:
+        audio.audio_data = mono_audio
+        return audio
+    else:
+        return AudioSamples(mono_audio, audio.sample_rate)
 
-def remove_silence(audio: AudioSamples, silence_thresh=-30, min_silence_len=1000, min_segment_len=1000, fade_duration=50, silence_duration=50) -> AudioSamples:
+def remove_silence(audio: AudioSamples, silence_thresh=-30, min_silence_len=1000, min_segment_len=1000, fade_duration=50, silence_duration=50, inplace: bool = True) -> AudioSamples:
     """
     Removes silence from an audio, joins selected segments with fade-in, fade-out, and silence between them.
 
@@ -63,6 +74,7 @@ def remove_silence(audio: AudioSamples, silence_thresh=-30, min_silence_len=1000
     min_segment_len (int): The minimum length of a segment to be kept (in ms).
     fade_duration (int): The duration of fade-in and fade-out (in ms).
     silence_duration (int): The duration of silence to insert between segments (in ms).
+    inplace (bool): If True, modifies the audio in-place. If False, returns a new AudioSamples instance.
 
     Returns:
     Audio: The audio with silence removed.
@@ -98,9 +110,9 @@ def remove_silence(audio: AudioSamples, silence_thresh=-30, min_silence_len=1000
         
         segment = audio.audio_data[:, start:end]
         
-        # Apply fade-in and fade-out
-        fade_in = torch.linspace(0, 1, steps=fade_samples)
-        fade_out = torch.linspace(1, 0, steps=fade_samples)
+        # Apply fade-in and fade-out (create tensors on same device)
+        fade_in = torch.linspace(0, 1, steps=fade_samples, device=audio.device)
+        fade_out = torch.linspace(1, 0, steps=fade_samples, device=audio.device)
         segment[:, :fade_samples] *= fade_in
         segment[:, -fade_samples:] *= fade_out
         
@@ -112,9 +124,13 @@ def remove_silence(audio: AudioSamples, silence_thresh=-30, min_silence_len=1000
     if silence_samples > 0:
         output_audio = output_audio[:, :-silence_samples]
 
-    return AudioSamples(output_audio, audio.sample_rate)
+    if inplace:
+        audio.audio_data = output_audio
+        return audio
+    else:
+        return AudioSamples(output_audio, audio.sample_rate)
 
-def break_into_chunks(audio: AudioSamples, chunk_size=5000, fade_duration=50) -> list[AudioSamples]:
+def break_into_chunks(audio: AudioSamples, chunk_size=5000, fade_duration=50, inplace: bool = True) -> list[AudioSamples]:
     """
     Breaks the audio into n_chunks equal parts, and from each part,
     extracts a segment of duration chunk_size milliseconds that is
@@ -125,6 +141,8 @@ def break_into_chunks(audio: AudioSamples, chunk_size=5000, fade_duration=50) ->
     audio (Audio): Audio object to process.
     chunk_size (int): Size of each chunk in milliseconds.
     fade_duration (int): Duration of fade in and fade out in milliseconds.
+    inplace (bool): If True, modifies the audio in-place. If False, returns a new AudioSamples instance.
+                   Note: This function always returns a list, so inplace only affects tensor device placement.
 
     Returns:
     list[Audio]: List of Audio chunks with fade-in and fade-out applied.
@@ -153,9 +171,9 @@ def break_into_chunks(audio: AudioSamples, chunk_size=5000, fade_duration=50) ->
 
         chunk = audio.audio_data[:, chunk_start:chunk_end]
 
-        # Apply fade in and fade out
-        fade_in = torch.linspace(0, 1, steps=fade_length)
-        fade_out = torch.linspace(1, 0, steps=fade_length)
+        # Apply fade in and fade out (create tensors on same device)
+        fade_in = torch.linspace(0, 1, steps=fade_length, device=audio.device)
+        fade_out = torch.linspace(1, 0, steps=fade_length, device=audio.device)
         chunk[:, :fade_length] *= fade_in
         chunk[:, -fade_length:] *= fade_out
 
@@ -163,13 +181,14 @@ def break_into_chunks(audio: AudioSamples, chunk_size=5000, fade_duration=50) ->
 
     return chunks
 
-def normalize_audio_rms(audio: AudioSamples, target_rms=-15) -> AudioSamples:
+def normalize_audio_rms(audio: AudioSamples, target_rms=-15, inplace: bool = True) -> AudioSamples:
     """
     Normalizes the audio using the RMS method.
 
     Parameters:
     audio (Audio): The audio to normalize.
     target_rms (float): The target RMS level in dB (default: -15 dB).
+    inplace (bool): If True, modifies the audio in-place. If False, returns a new AudioSamples instance.
 
     Returns:
     Audio: The normalized audio.
@@ -186,6 +205,10 @@ def normalize_audio_rms(audio: AudioSamples, target_rms=-15) -> AudioSamples:
     # Apply gain
     normalized_audio = audio.audio_data * gain
     
-    return AudioSamples(normalized_audio, audio.sample_rate)
+    if inplace:
+        audio.audio_data = normalized_audio
+        return audio
+    else:
+        return AudioSamples(normalized_audio, audio.sample_rate)
 
 # You can add more preprocessing functions here as needed

@@ -1,2 +1,8 @@
 /build/
 /voxlab/.ipynb_checkpoints/
+tests/__pycache__/*
+voxlab/__pycache__/*
+voxlab/core/__pycache__/*
+voxlab/embedding/__pycache__/*
+voxlab/preprocessing/__pycache__/*
+voxlab.egg-info/*

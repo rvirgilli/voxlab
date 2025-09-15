@@ -6,9 +6,8 @@ with open('voxlab/requirements.txt') as f:
 
 setup(
     name='voxlab',
-    version='0.1',
+    version='0.2.0',
     packages=find_packages(),
-    py_modules=['voxlab'],
     install_requires=requirements,
     entry_points={
         'console_scripts': [
@@ -17,12 +16,21 @@ setup(
     },
     author='Rafaello Virgilli',
     author_email='rvirgilli@gmail.com',
-    description='A toolbox for audio processing and voice deep learning models.',
+    description='A comprehensive Python toolbox for audio processing using PyTorch with device-aware operations and GPU acceleration.',
+    long_description=open('README.md').read(),
+    long_description_content_type='text/markdown',
     url='https://github.com/rvirgilli/voxlab',
     classifiers=[
-        'Programming Language :: Python :: 3',
+        'Development Status :: 4 - Beta',
+        'Intended Audience :: Developers',
+        'Intended Audience :: Science/Research',
+        'Topic :: Scientific/Engineering :: Artificial Intelligence',
+        'Topic :: Multimedia :: Sound/Audio :: Analysis',
         'License :: OSI Approved :: MIT License',
+        'Programming Language :: Python :: 3',
+        'Programming Language :: Python :: 3.11',
         'Operating System :: OS Independent',
     ],
-    python_requires='>=3.6',
+    keywords='audio processing, pytorch, torchaudio, signal processing, gpu acceleration',
+    python_requires='>=3.11.13',
 )

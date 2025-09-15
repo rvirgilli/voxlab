@@ -36,6 +36,23 @@ class AudioSamples:
     def to_tensor(self):
         return self.audio_data
 
+    @property
+    def device(self):
+        """Get the device of the audio data tensor."""
+        return self.audio_data.device
+
+    def to(self, device):
+        """Move audio data to specified device. Returns new AudioSamples instance."""
+        return AudioSamples(self.audio_data.to(device), self.sample_rate)
+
+    def cuda(self):
+        """Move audio data to CUDA device. Returns new AudioSamples instance."""
+        return self.to('cuda')
+
+    def cpu(self):
+        """Move audio data to CPU device. Returns new AudioSamples instance."""
+        return self.to('cpu')
+
     def export(self, export_path, format='wav'):
         if format not in ['wav', 'mp3', 'ogg', 'flac']:
             raise ValueError(f"Unsupported export format: {format}")
