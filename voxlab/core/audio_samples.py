@@ -7,6 +7,13 @@ class AudioSamples:
     def __init__(self, audio_data, sample_rate):
         self.audio_data = audio_data
         self.sample_rate = sample_rate
+    
+    def __repr__(self):
+        """String representation of AudioSamples."""
+        channel_desc = "mono" if self.is_mono else f"{self.channels}-channel"
+        return (f"AudioSamples({channel_desc}, {self.duration:.3f}s, "
+                f"{self.sample_rate}Hz, {self.num_samples:,} samples, "
+                f"device={self.device})")
 
     @classmethod
     def load(cls, file_path):
@@ -40,6 +47,41 @@ class AudioSamples:
     def device(self):
         """Get the device of the audio data tensor."""
         return self.audio_data.device
+    
+    @property
+    def duration(self):
+        """Get the duration of the audio in seconds."""
+        return self.audio_data.shape[1] / self.sample_rate
+    
+    @property
+    def num_samples(self):
+        """Get the number of audio samples."""
+        return self.audio_data.shape[1]
+    
+    @property
+    def channels(self):
+        """Get the number of audio channels."""
+        return self.audio_data.shape[0]
+    
+    @property
+    def shape(self):
+        """Get the shape of the audio tensor (channels, samples)."""
+        return self.audio_data.shape
+    
+    @property
+    def dtype(self):
+        """Get the data type of the audio tensor."""
+        return self.audio_data.dtype
+    
+    @property
+    def is_mono(self):
+        """Check if audio is mono (single channel)."""
+        return self.channels == 1
+    
+    @property
+    def is_stereo(self):
+        """Check if audio is stereo (two channels)."""
+        return self.channels == 2
 
     def to(self, device):
         """Move audio data to specified device. Returns new AudioSamples instance."""

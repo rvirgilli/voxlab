@@ -45,7 +45,11 @@ def convert_to_mono(audio: AudioSamples, method='left', inplace: bool = True) ->
     ValueError: If the method is unsupported or if the audio has more than two channels.
     """
     if audio.audio_data.shape[0] == 1:
-        return audio  # Already mono
+        # Already mono - respect inplace parameter for consistency
+        if inplace:
+            return audio
+        else:
+            return AudioSamples(audio.audio_data.clone(), audio.sample_rate)
 
     if audio.audio_data.shape[0] > 2:
         raise ValueError("Audio has more than two channels.")

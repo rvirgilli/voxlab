@@ -80,16 +80,30 @@ class TestConvertToMono:
         assert stereo_audio.audio_data.shape == original_shape
     
     def test_convert_mono_to_mono(self):
-        """Test converting mono audio (should return unchanged)."""
+        """Test converting mono audio with inplace=True (should return same object)."""
         mono_audio = generate_sine_wave_audio(duration_sec=1.0, sample_rate=44100, channels=1)
         original_data = mono_audio.audio_data.clone()
         
         result_audio = convert_to_mono(mono_audio, method='left', inplace=True)
         
-        # Should return same object since already mono
+        # Should return same object since already mono and inplace=True
         assert result_audio is mono_audio
         assert_audio_properties(result_audio, expected_sample_rate=44100, expected_channels=1, expected_duration=1.0)
         assert torch.equal(result_audio.audio_data, original_data)
+
+    def test_convert_mono_to_mono_not_inplace(self):
+        """Test converting mono audio with inplace=False (should return new object)."""
+        mono_audio = generate_sine_wave_audio(duration_sec=1.0, sample_rate=44100, channels=1)
+        original_data = mono_audio.audio_data.clone()
+        
+        result_audio = convert_to_mono(mono_audio, method='left', inplace=False)
+        
+        # Should return different object since inplace=False
+        assert result_audio is not mono_audio
+        assert_audio_properties(result_audio, expected_sample_rate=44100, expected_channels=1, expected_duration=1.0)
+        assert torch.equal(result_audio.audio_data, original_data)
+        # Original should remain unchanged
+        assert torch.equal(mono_audio.audio_data, original_data)
     
     def test_convert_invalid_method(self):
         """Test converting with invalid method."""

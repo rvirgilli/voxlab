@@ -1,4 +1,5 @@
-/build/
+build/*
+dist/*
 /voxlab/.ipynb_checkpoints/
 tests/__pycache__/*
 voxlab/__pycache__/*
