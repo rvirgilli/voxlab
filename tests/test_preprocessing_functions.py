@@ -6,7 +6,7 @@ import pytest
 import torch
 from voxlab.core.audio_samples import AudioSamples
 from voxlab.preprocessing.functions import (
-    convert_to_mono, remove_silence, break_into_chunks, normalize_audio_rms
+    convert_to_mono, remove_silence, break_into_chunks, normalize_audio_rms, trim_audio
 )
 from tests.utils import (
     generate_sine_wave_audio, generate_mixed_audio, generate_silence_audio,
@@ -357,3 +357,157 @@ class TestNormalizeAudioRms:
         # Shape should be identical
         assert normalized_audio.audio_data.shape == original_audio.audio_data.shape
         assert normalized_audio.sample_rate == original_audio.sample_rate
+
+
+class TestTrimAudio:
+    """Test the trim_audio function."""
+    
+    def test_trim_both_ends_basic(self):
+        """Test trimming silence from both ends."""
+        # Create audio with silence on both ends: silence + signal + silence
+        silence_start = generate_silence_audio(duration_sec=0.5, sample_rate=44100, channels=1)
+        signal = generate_sine_wave_audio(duration_sec=1.0, sample_rate=44100, amplitude=0.5, channels=1)
+        silence_end = generate_silence_audio(duration_sec=0.3, sample_rate=44100, channels=1)
+        
+        # Concatenate: 0.5s silence + 1s signal + 0.3s silence = 1.8s total
+        full_audio_data = torch.cat([silence_start.audio_data, signal.audio_data, silence_end.audio_data], dim=1)
+        full_audio = AudioSamples(full_audio_data, 44100)
+        
+        # Trim both ends
+        trimmed_audio = trim_audio(full_audio, silence_thresh=-40, mode='both', inplace=False)
+        
+        # Should be approximately 1 second (the signal part)
+        assert_audio_properties(trimmed_audio, expected_sample_rate=44100, expected_channels=1)
+        assert abs(trimmed_audio.duration - 1.0) < 0.1  # Allow some tolerance
+        # Original should be unchanged
+        assert abs(full_audio.duration - 1.8) < 0.1
+    
+    def test_trim_start_only(self):
+        """Test trimming silence from start only."""
+        # Create audio: silence + signal
+        silence_start = generate_silence_audio(duration_sec=0.5, sample_rate=44100, channels=1)
+        signal = generate_sine_wave_audio(duration_sec=1.0, sample_rate=44100, amplitude=0.5, channels=1)
+        
+        full_audio_data = torch.cat([silence_start.audio_data, signal.audio_data], dim=1)
+        full_audio = AudioSamples(full_audio_data, 44100)
+        
+        # Trim start only
+        trimmed_audio = trim_audio(full_audio, silence_thresh=-40, mode='start', inplace=False)
+        
+        # Should be approximately 1 second (removed start silence)
+        assert_audio_properties(trimmed_audio, expected_sample_rate=44100, expected_channels=1)
+        assert abs(trimmed_audio.duration - 1.0) < 0.1
+    
+    def test_trim_end_only(self):
+        """Test trimming silence from end only."""
+        # Create audio: signal + silence
+        signal = generate_sine_wave_audio(duration_sec=1.0, sample_rate=44100, amplitude=0.5, channels=1)
+        silence_end = generate_silence_audio(duration_sec=0.3, sample_rate=44100, channels=1)
+        
+        full_audio_data = torch.cat([signal.audio_data, silence_end.audio_data], dim=1)
+        full_audio = AudioSamples(full_audio_data, 44100)
+        
+        # Trim end only
+        trimmed_audio = trim_audio(full_audio, silence_thresh=-40, mode='end', inplace=False)
+        
+        # Should be approximately 1 second (removed end silence)
+        assert_audio_properties(trimmed_audio, expected_sample_rate=44100, expected_channels=1)
+        assert abs(trimmed_audio.duration - 1.0) < 0.1
+    
+    def test_trim_inplace_true(self):
+        """Test trim_audio with inplace=True."""
+        silence_start = generate_silence_audio(duration_sec=0.2, sample_rate=22050, channels=2)
+        signal = generate_sine_wave_audio(duration_sec=0.5, sample_rate=22050, amplitude=0.5, channels=2)
+        
+        full_audio_data = torch.cat([silence_start.audio_data, signal.audio_data], dim=1)
+        audio = AudioSamples(full_audio_data, 22050)
+        original_id = id(audio)
+        
+        result = trim_audio(audio, silence_thresh=-40, mode='start', inplace=True)
+        
+        # Should return same object
+        assert result is audio
+        assert id(result) == original_id
+        # Duration should be reduced
+        assert abs(result.duration - 0.5) < 0.1
+    
+    def test_trim_inplace_false(self):
+        """Test trim_audio with inplace=False."""
+        silence_start = generate_silence_audio(duration_sec=0.2, sample_rate=22050, channels=2)
+        signal = generate_sine_wave_audio(duration_sec=0.5, sample_rate=22050, amplitude=0.5, channels=2)
+        
+        full_audio_data = torch.cat([silence_start.audio_data, signal.audio_data], dim=1)
+        audio = AudioSamples(full_audio_data, 22050)
+        original_duration = audio.duration
+        
+        result = trim_audio(audio, silence_thresh=-40, mode='start', inplace=False)
+        
+        # Should return different object
+        assert result is not audio
+        # Original should be unchanged
+        assert abs(audio.duration - original_duration) < 0.01
+        # Result should be trimmed
+        assert abs(result.duration - 0.5) < 0.1
+    
+    def test_trim_all_silence(self):
+        """Test trimming audio that is all silence."""
+        silence_audio = generate_silence_audio(duration_sec=1.0, sample_rate=44100, channels=1)
+        
+        trimmed_audio = trim_audio(silence_audio, silence_thresh=-40, mode='both', inplace=False)
+        
+        # Should return minimal audio (1 sample)
+        assert trimmed_audio.num_samples == 1
+        assert_audio_properties(trimmed_audio, expected_sample_rate=44100, expected_channels=1)
+    
+    def test_trim_no_silence(self):
+        """Test trimming audio with no silence."""
+        signal_audio = generate_sine_wave_audio(duration_sec=1.0, sample_rate=44100, amplitude=0.5, channels=1)
+        
+        trimmed_audio = trim_audio(signal_audio, silence_thresh=-40, mode='both', inplace=False)
+        
+        # Should be mostly unchanged (might lose a few samples due to floating point precision)
+        assert_audio_properties(trimmed_audio, expected_sample_rate=44100, expected_channels=1)
+        assert abs(trimmed_audio.duration - 1.0) < 0.01  # Allow small tolerance
+        # Should retain most of the audio
+        assert trimmed_audio.num_samples >= signal_audio.num_samples - 10
+    
+    def test_trim_stereo_audio(self):
+        """Test trimming stereo audio."""
+        silence_start = generate_silence_audio(duration_sec=0.3, sample_rate=48000, channels=2)
+        signal = generate_sine_wave_audio(duration_sec=1.0, sample_rate=48000, amplitude=0.5, channels=2)
+        silence_end = generate_silence_audio(duration_sec=0.2, sample_rate=48000, channels=2)
+        
+        full_audio_data = torch.cat([silence_start.audio_data, signal.audio_data, silence_end.audio_data], dim=1)
+        full_audio = AudioSamples(full_audio_data, 48000)
+        
+        trimmed_audio = trim_audio(full_audio, silence_thresh=-40, mode='both', inplace=False)
+        
+        # Should preserve stereo and remove silence
+        assert_audio_properties(trimmed_audio, expected_sample_rate=48000, expected_channels=2)
+        assert abs(trimmed_audio.duration - 1.0) < 0.1
+    
+    def test_trim_invalid_mode(self):
+        """Test trim_audio with invalid mode."""
+        audio = generate_sine_wave_audio(duration_sec=1.0, sample_rate=44100, channels=1)
+        
+        with pytest.raises(ValueError, match="Invalid mode 'invalid'"):
+            trim_audio(audio, mode='invalid')
+    
+    def test_trim_different_thresholds(self):
+        """Test trim_audio with different silence thresholds."""
+        # Create audio with very quiet signal on ends
+        quiet_start = generate_sine_wave_audio(duration_sec=0.2, sample_rate=44100, amplitude=0.001, channels=1)  # Very quiet
+        loud_signal = generate_sine_wave_audio(duration_sec=0.5, sample_rate=44100, amplitude=0.5, channels=1)   # Loud
+        quiet_end = generate_sine_wave_audio(duration_sec=0.2, sample_rate=44100, amplitude=0.001, channels=1)   # Very quiet
+        
+        full_audio_data = torch.cat([quiet_start.audio_data, loud_signal.audio_data, quiet_end.audio_data], dim=1)
+        audio = AudioSamples(full_audio_data, 44100)
+        
+        # With strict threshold (-60dB), should keep quiet parts
+        trimmed_strict = trim_audio(audio, silence_thresh=-60, mode='both', inplace=False)
+        
+        # With loose threshold (-20dB), should remove quiet parts  
+        trimmed_loose = trim_audio(audio, silence_thresh=-20, mode='both', inplace=False)
+        
+        # Loose threshold should result in shorter audio
+        assert trimmed_loose.duration < trimmed_strict.duration

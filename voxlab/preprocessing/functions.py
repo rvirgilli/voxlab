@@ -215,4 +215,58 @@ def normalize_audio_rms(audio: AudioSamples, target_rms=-15, inplace: bool = Tru
     else:
         return AudioSamples(normalized_audio, audio.sample_rate)
 
+def trim_audio(audio: AudioSamples, silence_thresh=-30, mode='both', inplace: bool = True) -> AudioSamples:
+    """
+    Trims silence from the beginning and/or end of audio.
+
+    Parameters:
+    audio (AudioSamples): The audio to trim.
+    silence_thresh (int): The threshold for considering silence (in dB).
+    mode (str): Trimming mode - 'both' (default), 'start', or 'end'.
+    inplace (bool): If True, modifies the audio in-place. If False, returns a new AudioSamples instance.
+
+    Returns:
+    AudioSamples: The trimmed audio.
+    
+    Raises:
+    ValueError: If mode is not 'both', 'start', or 'end'.
+    """
+    if mode not in ['both', 'start', 'end']:
+        raise ValueError(f"Invalid mode '{mode}'. Must be 'both', 'start', or 'end'.")
+    
+    # Convert silence threshold from dB to amplitude (same as remove_silence)
+    silence_thresh_linear = 10 ** (silence_thresh / 20)
+    
+    # Detect silent samples (same approach as remove_silence)
+    is_silent = torch.lt(torch.abs(audio.audio_data), silence_thresh_linear)
+    # For multi-channel audio, a sample is silent if ALL channels are silent
+    if audio.audio_data.shape[0] > 1:
+        is_silent = torch.all(is_silent, dim=0)
+    else:
+        is_silent = is_silent.squeeze(0)
+    
+    # Find non-silent samples
+    non_silent_indices = torch.where(~is_silent)[0]
+    
+    if len(non_silent_indices) == 0:
+        # All audio is silent - return minimal audio (1 sample to avoid empty tensor)
+        trimmed_audio = audio.audio_data[:, :1]
+    else:
+        start_idx = 0
+        end_idx = audio.audio_data.shape[1]
+        
+        if mode in ['both', 'start']:
+            start_idx = non_silent_indices[0].item()
+        
+        if mode in ['both', 'end']:
+            end_idx = non_silent_indices[-1].item() + 1
+        
+        trimmed_audio = audio.audio_data[:, start_idx:end_idx]
+    
+    if inplace:
+        audio.audio_data = trimmed_audio
+        return audio
+    else:
+        return AudioSamples(trimmed_audio, audio.sample_rate)
+
 # You can add more preprocessing functions here as needed
