@@ -40,11 +40,18 @@ class AudioSamples:
             
             return cls(audio_data, sample_rate)
         except Exception as e:
-            raise ValueError(f"Error loading audio file {file_path}: {e}")
+            # For MP4 files, try librosa fallback since torchaudio has limited MP4/AAC support
+            if file_path.suffix.lower() == '.mp4':
+                try:
+                    return cls._load_with_librosa(file_path)
+                except Exception as librosa_e:
+                    raise ValueError(f"Error loading MP4 file {file_path}. TorchAudio error: {e}. Librosa error: {librosa_e}")
+            else:
+                raise ValueError(f"Error loading audio file {file_path}: {e}")
     
     @classmethod
     def _load_with_librosa(cls, file_path):
-        """Load audio files using librosa (for WebM and other formats not supported by torchaudio)."""
+        """Load audio files using librosa (for WebM, MP4, and other formats not fully supported by torchaudio)."""
         # Load with librosa, preserving original sample rate and channels
         audio_data, sample_rate = librosa.load(str(file_path), sr=None, mono=False)
         

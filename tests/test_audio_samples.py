@@ -244,6 +244,20 @@ class TestAudioSamplesLoadBehavior:
         assert audio.sample_rate > 0
         assert audio.duration > 0
         
+    def test_load_mp4_file(self):
+        """Test loading MP4 file using librosa fallback when torchaudio fails."""
+        mp4_file = Path(__file__).parent / "files" / "test_aac.mp4"
+        
+        # Load MP4 file
+        audio = AudioSamples.load(mp4_file)
+        
+        # Verify it loaded successfully
+        assert isinstance(audio, AudioSamples)
+        assert audio.audio_data.dtype == torch.float32
+        assert audio.audio_data.shape[0] == 2  # Should be converted to stereo
+        assert audio.sample_rate > 0
+        assert audio.duration > 0
+        
     def test_load_mono_to_stereo_conversion(self):
         """Test that mono audio gets converted to stereo."""
         # Create a mono audio file

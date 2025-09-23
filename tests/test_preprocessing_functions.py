@@ -124,8 +124,8 @@ class TestRemoveSilence:
         processed_audio = remove_silence(mixed_audio, 
                                        silence_thresh=-30, 
                                        min_silence_len=500, 
-                                       min_segment_len=500,
-                                       fade_duration=10,
+                                       _min_segment_len=500,
+                                       _fade_duration=10,
                                        silence_duration=10)
         
         assert isinstance(processed_audio, AudioSamples)
@@ -140,7 +140,7 @@ class TestRemoveSilence:
         processed_audio = remove_silence(signal_audio,
                                        silence_thresh=-30,
                                        min_silence_len=100,
-                                       min_segment_len=100)
+                                       _min_segment_len=100)
         
         assert isinstance(processed_audio, AudioSamples)
         assert_audio_properties(processed_audio, expected_sample_rate=44100, expected_channels=1)
@@ -152,7 +152,7 @@ class TestRemoveSilence:
         processed_audio = remove_silence(silence_audio,
                                        silence_thresh=-30,
                                        min_silence_len=100,
-                                       min_segment_len=100)
+                                       _min_segment_len=100)
         
         assert isinstance(processed_audio, AudioSamples)
         assert_audio_properties(processed_audio, expected_sample_rate=44100, expected_channels=1)
@@ -164,7 +164,7 @@ class TestRemoveSilence:
         processed_audio = remove_silence(mixed_audio,
                                        silence_thresh=-30,
                                        min_silence_len=200,
-                                       min_segment_len=200)
+                                       _min_segment_len=200)
         
         assert isinstance(processed_audio, AudioSamples)
         assert_audio_properties(processed_audio, expected_sample_rate=22050, expected_channels=2)
