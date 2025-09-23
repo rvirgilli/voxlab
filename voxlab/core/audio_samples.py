@@ -1,5 +1,6 @@
 import torchaudio
 import torch
+import librosa
 from pathlib import Path
 
 
@@ -19,8 +20,12 @@ class AudioSamples:
     def load(cls, file_path):
         file_path = Path(file_path)
         
+        # Use librosa for WebM files, torchaudio for others
+        if file_path.suffix.lower() == '.webm':
+            return cls._load_with_librosa(file_path)
+        
         try:
-            # Load audio file
+            # Load audio file with torchaudio
             audio_data, sample_rate = torchaudio.load(str(file_path))
             
             # Ensure audio is in float32 format
@@ -36,6 +41,32 @@ class AudioSamples:
             return cls(audio_data, sample_rate)
         except Exception as e:
             raise ValueError(f"Error loading audio file {file_path}: {e}")
+    
+    @classmethod
+    def _load_with_librosa(cls, file_path):
+        """Load audio files using librosa (for WebM and other formats not supported by torchaudio)."""
+        # Load with librosa, preserving original sample rate and channels
+        audio_data, sample_rate = librosa.load(str(file_path), sr=None, mono=False)
+        
+        # Convert numpy array to torch tensor
+        if audio_data.ndim == 1:
+            # Mono audio - convert to stereo by duplicating channel
+            audio_data = torch.from_numpy(audio_data).unsqueeze(0).repeat(2, 1)
+        else:
+            # Multi-channel audio
+            audio_data = torch.from_numpy(audio_data)
+            if audio_data.shape[0] == 1:
+                # Mono in multi-channel format - convert to stereo
+                audio_data = audio_data.repeat(2, 1)
+            elif audio_data.shape[0] > 2:
+                # More than stereo - keep only first two channels
+                audio_data = audio_data[:2, :]
+        
+        # Ensure float32 format for consistency with torchaudio loading
+        if audio_data.dtype != torch.float32:
+            audio_data = audio_data.to(torch.float32)
+        
+        return cls(audio_data, sample_rate)
 
     def to_numpy(self):
         return self.audio_data.numpy()

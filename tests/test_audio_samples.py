@@ -230,6 +230,20 @@ class TestAudioSamplesConversion:
 class TestAudioSamplesLoadBehavior:
     """Test AudioSamples.load() behavior with different audio formats."""
     
+    def test_load_webm_file(self):
+        """Test loading WebM file using librosa."""
+        webm_file = Path(__file__).parent / "files" / "test_file.webm"
+        
+        # Load WebM file
+        audio = AudioSamples.load(webm_file)
+        
+        # Verify it loaded successfully
+        assert isinstance(audio, AudioSamples)
+        assert audio.audio_data.dtype == torch.float32
+        assert audio.audio_data.shape[0] == 2  # Should be converted to stereo
+        assert audio.sample_rate > 0
+        assert audio.duration > 0
+        
     def test_load_mono_to_stereo_conversion(self):
         """Test that mono audio gets converted to stereo."""
         # Create a mono audio file
