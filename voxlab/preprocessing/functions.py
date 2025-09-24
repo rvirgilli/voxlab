@@ -288,55 +288,387 @@ def remove_silence(audio: AudioSamples, min_silence_len=1000, silence_thresh=-16
     else:
         return AudioSamples(output_audio, audio.sample_rate)
 
-def break_into_chunks(audio: AudioSamples, chunk_size=5000, fade_duration=50, inplace: bool = False) -> list[AudioSamples]:
+def _apply_chunk_fades(chunk: torch.Tensor, fade_duration: int, sample_rate: int, device: torch.device) -> torch.Tensor:
     """
-    Breaks the audio into n_chunks equal parts, and from each part,
-    extracts a segment of duration chunk_size milliseconds that is
-    centered within that part. Applies fade-in and fade-out to each chunk,
-    and returns a list of these chunks.
-
+    Apply fade-in and fade-out to a chunk tensor.
+    
     Parameters:
-    audio (Audio): Audio object to process.
-    chunk_size (int): Size of each chunk in milliseconds.
-    fade_duration (int): Duration of fade in and fade out in milliseconds.
-    inplace (bool): Parameter ignored - function always returns a list of new AudioSamples instances.
-
+    chunk (torch.Tensor): Audio chunk tensor [channels, samples]
+    fade_duration (int): Duration of fade in/out in milliseconds
+    sample_rate (int): Sample rate of the audio
+    device (torch.device): Device to create fade tensors on
+    
     Returns:
-    list[Audio]: List of Audio chunks with fade-in and fade-out applied.
+    torch.Tensor: Chunk with fades applied
     """
-    chunks = []
-    audio_length = audio.audio_data.shape[1]
-    chunk_length = int(chunk_size * audio.sample_rate / 1000)
-    fade_length = int(fade_duration * audio.sample_rate / 1000)
-
-    n_chunks = audio_length // chunk_length
-    if n_chunks == 0:
-        return chunks
-
-    part_length = audio_length // n_chunks
-
-    for i in range(n_chunks):
-        part_start = i * part_length
-        # part_end = (i + 1) * part_length  # Not used, commenting out
-
-        chunk_start = part_start + (part_length - chunk_length) // 2
-        chunk_end = chunk_start + chunk_length
-
-        if chunk_end > audio_length:
-            chunk_end = audio_length
-            chunk_start = chunk_end - chunk_length
-
-        chunk = audio.audio_data[:, chunk_start:chunk_end]
-
-        # Apply fade in and fade out (create tensors on same device)
-        fade_in = torch.linspace(0, 1, steps=fade_length, device=audio.device)
-        fade_out = torch.linspace(1, 0, steps=fade_length, device=audio.device)
+    fade_length = int(fade_duration * sample_rate / 1000)
+    chunk_length = chunk.shape[1]
+    
+    # Ensure fade length doesn't exceed chunk length
+    fade_length = min(fade_length, chunk_length // 2)
+    
+    if fade_length > 0:
+        fade_in = torch.linspace(0, 1, steps=fade_length, device=device)
+        fade_out = torch.linspace(1, 0, steps=fade_length, device=device)
+        chunk = chunk.clone()  # Avoid modifying original
         chunk[:, :fade_length] *= fade_in
         chunk[:, -fade_length:] *= fade_out
+    
+    return chunk
 
+def _pad_audio_to_duration(audio_tensor: torch.Tensor, target_duration_samples: int) -> torch.Tensor:
+    """
+    Pad audio tensor with zeros to reach target duration.
+    
+    Parameters:
+    audio_tensor (torch.Tensor): Audio tensor [channels, samples]
+    target_duration_samples (int): Target duration in samples
+    
+    Returns:
+    torch.Tensor: Padded audio tensor [channels, target_duration_samples]
+    """
+    current_samples = audio_tensor.shape[1]
+    if current_samples >= target_duration_samples:
+        return audio_tensor[:, :target_duration_samples]
+    
+    padding_needed = target_duration_samples - current_samples
+    padding = torch.zeros(audio_tensor.shape[0], padding_needed,
+                        dtype=audio_tensor.dtype, device=audio_tensor.device)
+    return torch.cat([audio_tensor, padding], dim=1)
+
+# Audio chunking using range covering functions - maintains device integrity
+
+def _break_into_chunks_exact_count(audio: AudioSamples, chunk_count: int, chunk_duration: int, fade_duration=50, return_timings=False):
+    """
+    Break audio into exactly N evenly spaced chunks using range covering functions.
+    All operations maintain device integrity - no device transfers.
+    
+    Parameters:
+    audio (AudioSamples): Audio object to process
+    chunk_count (int): Exact number of chunks to create
+    chunk_duration (int): Duration of each chunk in milliseconds
+    fade_duration (int): Duration of fade in/out in milliseconds
+    return_timings (bool): If True, return timing information
+    
+    Returns:
+    list[AudioSamples] or tuple[list[AudioSamples], list[tuple[float, float]]]
+    """
+    from .range_covering_functions import get_chunks_exactly
+    
+    if chunk_count <= 0:
+        return [] if not return_timings else ([], [])
+    
+    audio_length_samples = audio.audio_data.shape[1]
+    chunk_duration_samples = int(chunk_duration * audio.sample_rate / 1000)
+    
+    # Handle edge case: audio shorter than chunk duration
+    if audio_length_samples < chunk_duration_samples:
+        # Return n copies of padded audio 
+        padded_chunk = _pad_audio_to_duration(audio.audio_data, chunk_duration_samples)
+        chunk = _apply_chunk_fades(padded_chunk, fade_duration, audio.sample_rate, audio.device)
+        chunks = [AudioSamples(chunk, audio.sample_rate) for _ in range(chunk_count)]
+        if return_timings:
+            timings = [(0.0, chunk_duration / 1000.0) for _ in range(chunk_count)]
+            return chunks, timings
+        return chunks
+    
+    # Use range covering function to get chunk positions
+    try:
+        positions = get_chunks_exactly(audio_length_samples, chunk_duration_samples, chunk_count)
+    except ValueError:
+        # For single chunk case where chunk_duration < audio_length, position chunk at start
+        if chunk_count == 1:
+            positions = [[0, chunk_duration_samples]]
+        else:
+            # Fallback for other impossible cases
+            if return_timings:
+                return [], []
+            return []
+    
+    # Extract chunks at calculated positions - maintain device throughout
+    chunks = []
+    timings = []
+    
+    for start_samples, end_samples in positions:
+        start_pos = int(round(start_samples))
+        end_pos = int(round(end_samples))
+        
+        # Ensure chunk is exactly chunk_duration_samples long
+        if end_pos > audio_length_samples:
+            # Extract available audio and pad with zeros (on same device)
+            available_chunk = audio.audio_data[:, start_pos:audio_length_samples]
+            padding_needed = chunk_duration_samples - (audio_length_samples - start_pos)
+            padding = torch.zeros(audio.audio_data.shape[0], padding_needed,
+                                dtype=audio.audio_data.dtype, device=audio.audio_data.device)
+            chunk = torch.cat([available_chunk, padding], dim=1)
+            # Timing reflects actual audio content
+            actual_end_sec = audio_length_samples / audio.sample_rate
+        else:
+            # Extract exact chunk duration
+            actual_end = min(start_pos + chunk_duration_samples, end_pos)
+            chunk = audio.audio_data[:, start_pos:actual_end]
+            # Pad if needed to reach exact chunk duration
+            if chunk.shape[1] < chunk_duration_samples:
+                padding_needed = chunk_duration_samples - chunk.shape[1]
+                padding = torch.zeros(audio.audio_data.shape[0], padding_needed,
+                                    dtype=audio.audio_data.dtype, device=audio.audio_data.device)
+                chunk = torch.cat([chunk, padding], dim=1)
+            actual_end_sec = actual_end / audio.sample_rate
+        
+        # Apply fades (maintains device)
+        chunk = _apply_chunk_fades(chunk, fade_duration, audio.sample_rate, audio.device)
         chunks.append(AudioSamples(chunk, audio.sample_rate))
-
+        
+        # Timing info in seconds
+        start_sec = start_pos / audio.sample_rate
+        timings.append((start_sec, actual_end_sec))
+    
+    if return_timings:
+        return chunks, timings
     return chunks
+
+def _break_into_chunks_min_overlap(audio: AudioSamples, chunk_duration=4000, min_overlap=2000, fade_duration=50, return_timings=False):
+    """
+    Creates evenly spaced chunks with minimum overlap constraint using range covering functions.
+    All operations maintain device integrity - no device transfers.
+    
+    Parameters:
+    audio (AudioSamples): Audio object to process
+    chunk_duration (int): Duration of each chunk in milliseconds
+    min_overlap (int): Minimum overlap between consecutive chunks in milliseconds
+    fade_duration (int): Duration of fade in/out in milliseconds
+    return_timings (bool): If True, return timing information
+    
+    Returns:
+    list[AudioSamples] or tuple[list[AudioSamples], list[tuple[float, float]]]
+    """
+    from .range_covering_functions import get_chunks_max_spacing
+    
+    audio_length_samples = audio.audio_data.shape[1]
+    chunk_duration_samples = int(chunk_duration * audio.sample_rate / 1000)
+    min_overlap_samples = int(min_overlap * audio.sample_rate / 1000)
+    
+    if audio_length_samples <= chunk_duration_samples:
+        # Audio is shorter than chunk size, return single chunk padded to chunk_duration
+        padded_chunk = _pad_audio_to_duration(audio.audio_data, chunk_duration_samples)
+        chunk = _apply_chunk_fades(padded_chunk, fade_duration, audio.sample_rate, audio.device)
+        if return_timings:
+            timing = (0.0, chunk_duration / 1000.0)
+            return [AudioSamples(chunk, audio.sample_rate)], [timing]
+        return [AudioSamples(chunk, audio.sample_rate)]
+    
+    # Convert min_overlap to max_spacing: max_spacing = -min_overlap
+    max_spacing_samples = -min_overlap_samples
+    
+    # Use range covering function to get chunk positions
+    try:
+        positions = get_chunks_max_spacing(audio_length_samples, chunk_duration_samples, max_spacing_samples)
+    except ValueError as e:
+        # Handle extreme overlap cases - when min_overlap >= chunk_duration,
+        # fall back to overlapping chunks with smaller step size
+        if min_overlap_samples >= chunk_duration_samples:
+            # Create heavily overlapping chunks with step size = chunk_duration // 2
+            step_size = max(1, chunk_duration_samples // 2)
+            num_chunks = max(1, (audio_length_samples - chunk_duration_samples) // step_size + 1)
+            positions = []
+            for i in range(num_chunks):
+                start = i * step_size
+                end = min(start + chunk_duration_samples, audio_length_samples)
+                positions.append([start, end])
+        else:
+            # Other validation errors: fallback to single chunk
+            padded_chunk = _pad_audio_to_duration(audio.audio_data, chunk_duration_samples)
+            chunk = _apply_chunk_fades(padded_chunk, fade_duration, audio.sample_rate, audio.device)
+            if return_timings:
+                timing = (0.0, chunk_duration / 1000.0)
+                return [AudioSamples(chunk, audio.sample_rate)], [timing]
+            return [AudioSamples(chunk, audio.sample_rate)]
+    
+    # Extract chunks at calculated positions - maintain device throughout
+    chunks = []
+    timings = []
+    
+    for start_samples, end_samples in positions:
+        start_pos = int(round(start_samples))
+        end_pos = int(round(end_samples))
+        
+        # Ensure chunk is exactly chunk_duration_samples long
+        if end_pos > audio_length_samples:
+            # Extract available audio and pad with zeros (on same device)
+            available_chunk = audio.audio_data[:, start_pos:audio_length_samples]
+            padding_needed = chunk_duration_samples - (audio_length_samples - start_pos)
+            padding = torch.zeros(audio.audio_data.shape[0], padding_needed,
+                                dtype=audio.audio_data.dtype, device=audio.audio_data.device)
+            chunk = torch.cat([available_chunk, padding], dim=1)
+            # Timing reflects actual audio content
+            actual_end_sec = audio_length_samples / audio.sample_rate
+        else:
+            # Extract exact chunk duration  
+            actual_end = min(start_pos + chunk_duration_samples, end_pos)
+            chunk = audio.audio_data[:, start_pos:actual_end]
+            # Pad if needed to reach exact chunk duration
+            if chunk.shape[1] < chunk_duration_samples:
+                padding_needed = chunk_duration_samples - chunk.shape[1]
+                padding = torch.zeros(audio.audio_data.shape[0], padding_needed,
+                                    dtype=audio.audio_data.dtype, device=audio.audio_data.device)
+                chunk = torch.cat([chunk, padding], dim=1)
+            actual_end_sec = actual_end / audio.sample_rate
+        
+        # Apply fades (maintains device)
+        chunk = _apply_chunk_fades(chunk, fade_duration, audio.sample_rate, audio.device)
+        chunks.append(AudioSamples(chunk, audio.sample_rate))
+        
+        # Timing info in seconds
+        start_sec = start_pos / audio.sample_rate
+        timings.append((start_sec, actual_end_sec))
+    
+    if return_timings:
+        return chunks, timings
+    return chunks
+
+def _break_into_chunks_max_overlap(audio: AudioSamples, chunk_duration=4000, max_overlap=3000, fade_duration=50, return_timings=False):
+    """
+    Creates maximum evenly spaced chunks with overlap constraint using range covering functions.
+    All operations maintain device integrity - no device transfers.
+    
+    Parameters:
+    audio (AudioSamples): Audio object to process  
+    chunk_duration (int): Duration of each chunk in milliseconds
+    max_overlap (int): Maximum allowed overlap between consecutive chunks in milliseconds
+    fade_duration (int): Duration of fade in/out in milliseconds
+    return_timings (bool): If True, return timing information
+    
+    Returns:
+    list[AudioSamples] or tuple[list[AudioSamples], list[tuple[float, float]]]
+    """
+    from .range_covering_functions import get_chunks_min_spacing
+    
+    audio_length_samples = audio.audio_data.shape[1]
+    chunk_duration_samples = int(chunk_duration * audio.sample_rate / 1000)
+    max_overlap_samples = int(max_overlap * audio.sample_rate / 1000)
+    
+    if audio_length_samples <= chunk_duration_samples:
+        # Audio is shorter than chunk size, return single chunk padded to chunk_duration
+        padded_chunk = _pad_audio_to_duration(audio.audio_data, chunk_duration_samples)
+        chunk = _apply_chunk_fades(padded_chunk, fade_duration, audio.sample_rate, audio.device)
+        if return_timings:
+            timing = (0.0, chunk_duration / 1000.0)
+            return [AudioSamples(chunk, audio.sample_rate)], [timing]
+        return [AudioSamples(chunk, audio.sample_rate)]
+    
+    # Convert max_overlap to min_spacing: min_spacing = -max_overlap
+    min_spacing_samples = -max_overlap_samples
+    
+    # Use range covering function to get chunk positions
+    try:
+        positions = get_chunks_min_spacing(audio_length_samples, chunk_duration_samples, min_spacing_samples)
+    except ValueError:
+        # Fallback: single chunk
+        padded_chunk = _pad_audio_to_duration(audio.audio_data, chunk_duration_samples)
+        chunk = _apply_chunk_fades(padded_chunk, fade_duration, audio.sample_rate, audio.device)
+        if return_timings:
+            timing = (0.0, chunk_duration / 1000.0)
+            return [AudioSamples(chunk, audio.sample_rate)], [timing]
+        return [AudioSamples(chunk, audio.sample_rate)]
+    
+    # Extract chunks at calculated positions - maintain device throughout
+    chunks = []
+    timings = []
+    
+    for start_samples, end_samples in positions:
+        start_pos = int(round(start_samples))
+        end_pos = int(round(end_samples))
+        
+        # Ensure chunk is exactly chunk_duration_samples long
+        if end_pos > audio_length_samples:
+            # Extract available audio and pad with zeros (on same device)
+            available_chunk = audio.audio_data[:, start_pos:audio_length_samples]
+            padding_needed = chunk_duration_samples - (audio_length_samples - start_pos)
+            padding = torch.zeros(audio.audio_data.shape[0], padding_needed,
+                                dtype=audio.audio_data.dtype, device=audio.audio_data.device)
+            chunk = torch.cat([available_chunk, padding], dim=1)
+            # Timing reflects actual audio content
+            actual_end_sec = audio_length_samples / audio.sample_rate
+        else:
+            # Extract exact chunk duration
+            actual_end = min(start_pos + chunk_duration_samples, end_pos)
+            chunk = audio.audio_data[:, start_pos:actual_end]
+            # Pad if needed to reach exact chunk duration
+            if chunk.shape[1] < chunk_duration_samples:
+                padding_needed = chunk_duration_samples - chunk.shape[1]
+                padding = torch.zeros(audio.audio_data.shape[0], padding_needed,
+                                    dtype=audio.audio_data.dtype, device=audio.audio_data.device)
+                chunk = torch.cat([chunk, padding], dim=1)
+            actual_end_sec = actual_end / audio.sample_rate
+        
+        # Apply fades (maintains device)
+        chunk = _apply_chunk_fades(chunk, fade_duration, audio.sample_rate, audio.device)
+        chunks.append(AudioSamples(chunk, audio.sample_rate))
+        
+        # Timing info in seconds
+        start_sec = start_pos / audio.sample_rate
+        timings.append((start_sec, actual_end_sec))
+    
+    if return_timings:
+        return chunks, timings
+    return chunks
+
+
+def break_into_chunks(audio: AudioSamples, mode='exact_count', fade_duration=50, return_timings=False, **kwargs):
+    """
+    Break audio into chunks using different strategies.
+    
+    Parameters:
+    audio (AudioSamples): Audio object to process
+    mode (str): Chunking strategy - 'exact_count', 'min_overlap', or 'max_overlap'
+    fade_duration (int): Duration of fade in/out in milliseconds (default: 50)
+    return_timings (bool): If True, return (chunks, timings) tuple instead of just chunks
+    **kwargs: Mode-specific parameters
+    
+    Mode-specific parameters:
+    - 'exact_count': chunk_count (int), chunk_duration (int in ms)
+    - 'min_overlap': chunk_duration (int in ms), min_overlap (int in ms)
+    - 'max_overlap': chunk_duration (int in ms), max_overlap (int in ms)
+    
+    Returns:
+    list[AudioSamples] OR tuple[list[AudioSamples], list[tuple[float, float]]]:
+        If return_timings=False: List of audio chunks
+        If return_timings=True: (chunks, timings) where timings is [(start_sec, end_sec), ...]
+    
+    Examples:
+    # Create exactly 5 chunks of 4000ms each
+    chunks = break_into_chunks(audio, mode='exact_count', chunk_count=5, chunk_duration=4000)
+    
+    # Create chunks with timing info
+    chunks, timings = break_into_chunks(audio, mode='min_overlap', chunk_duration=4000, min_overlap=2000, return_timings=True)
+    print(f"Chunk 1: {timings[0][0]:.1f}s to {timings[0][1]:.1f}s")
+    """
+    if mode == 'exact_count':
+        chunk_count = kwargs.get('chunk_count')
+        chunk_duration = kwargs.get('chunk_duration')
+        
+        if chunk_count is None or chunk_duration is None:
+            raise ValueError("mode='exact_count' requires 'chunk_count' and 'chunk_duration' parameters")
+        
+        result = _break_into_chunks_exact_count(audio, chunk_count, chunk_duration, fade_duration, return_timings)
+    
+    elif mode == 'min_overlap':
+        chunk_duration = kwargs.get('chunk_duration', 4000)
+        min_overlap = kwargs.get('min_overlap', 0)
+        
+        result = _break_into_chunks_min_overlap(audio, chunk_duration, min_overlap, fade_duration, return_timings)
+    
+    elif mode == 'max_overlap':
+        chunk_duration = kwargs.get('chunk_duration', 4000)
+        max_overlap = kwargs.get('max_overlap', 0)
+        
+        result = _break_into_chunks_max_overlap(audio, chunk_duration, max_overlap, fade_duration, return_timings)
+    
+    else:
+        raise ValueError(f"Unknown mode '{mode}'. Supported modes: 'exact_count', 'min_overlap', 'max_overlap'")
+    
+    return result
+
 
 def normalize_audio_rms(audio: AudioSamples, target_rms=-15, inplace: bool = True) -> AudioSamples:
     """

@@ -62,7 +62,7 @@ class TestPreprocessingPipeline:
         pipeline = PreprocessingPipeline()
         pipeline.add_step(resample_audio, new_sample_rate=44100)
         pipeline.add_step(convert_to_mono, method='left')
-        pipeline.add_step(break_into_chunks, chunk_size=1000, fade_duration=50)  # 1-second chunks
+        pipeline.add_step(break_into_chunks, mode='exact_count', chunk_count=3, chunk_duration=1000, fade_duration=50)  # 3 chunks of 1-second each
         
         audio = generate_sine_wave_audio(duration_sec=3.0, sample_rate=44100, channels=2)
         result = pipeline.process(audio)

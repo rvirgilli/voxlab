@@ -14,6 +14,37 @@ from tests.utils import (
 )
 
 
+def calculate_expected_chunks(audio_duration_ms, chunk_duration_ms, mode, overlap_ms):
+    """Calculate expected number of chunks for different modes."""
+    if audio_duration_ms <= chunk_duration_ms:
+        return 1
+    
+    if mode == 'min_overlap':
+        # Min overlap: step_size = chunk_duration - min_overlap
+        step_size = chunk_duration_ms - overlap_ms
+        if step_size <= 0:
+            step_size = max(1, chunk_duration_ms // 4)
+        
+        # Calculate chunks needed for full coverage
+        remaining = audio_duration_ms - chunk_duration_ms
+        return 1 + max(0, (remaining + step_size - 1) // step_size)
+    
+    elif mode == 'max_overlap':
+        # Max overlap: step_size = chunk_duration - max_overlap  
+        min_step = chunk_duration_ms - overlap_ms
+        if min_step <= 0:
+            return 1
+        
+        # Maximum chunks that fit
+        remaining = audio_duration_ms - chunk_duration_ms
+        return 1 + remaining // min_step
+    
+    elif mode == 'exact_count':
+        return overlap_ms  # In this case, overlap_ms is actually chunk_count
+    
+    return 0
+
+
 class TestConvertToMono:
     """Test stereo to mono conversion with inplace functionality."""
     
@@ -171,72 +202,132 @@ class TestRemoveSilence:
 
 
 class TestBreakIntoChunks:
-    """Test audio chunking functionality."""
+    """Test the new unified audio chunking functionality."""
     
-    def test_break_into_chunks_basic(self):
-        """Test breaking audio into chunks."""
+    def test_break_into_chunks_exact_count_basic(self):
+        """Test exact count mode with precise calculations."""
         # Create 10-second audio
-        audio = generate_sine_wave_audio(duration_sec=10.0, sample_rate=44100, channels=2)
+        audio = generate_sine_wave_audio(duration_sec=10.0, sample_rate=16000, channels=1)
         
-        chunks = break_into_chunks(audio, chunk_size=2000, fade_duration=50)  # 2-second chunks
+        # Test exact count: 3 chunks of 4s each  
+        chunks = break_into_chunks(audio, mode='exact_count', chunk_count=3, chunk_duration=4000, fade_duration=50)
+        expected_chunks = calculate_expected_chunks(10000, 4000, 'exact_count', 3)
         
         assert isinstance(chunks, list)
-        assert len(chunks) == 5  # 10 seconds / 2 seconds per chunk
+        assert len(chunks) == expected_chunks == 3
         
+        # All chunks should be 4 seconds and evenly spaced from 0 to 10s
         for chunk in chunks:
             assert isinstance(chunk, AudioSamples)
-            assert_audio_properties(chunk, expected_sample_rate=44100, expected_channels=2, expected_duration=2.0)
+            assert_audio_properties(chunk, expected_sample_rate=16000, expected_channels=1, expected_duration=4.0)
     
-    def test_break_into_chunks_small_audio(self):
-        """Test chunking audio smaller than chunk size."""
-        # Create 0.5-second audio
-        audio = generate_sine_wave_audio(duration_sec=0.5, sample_rate=44100, channels=1)
+    def test_break_into_chunks_min_overlap_your_case(self):
+        """Test your specific use case: 11s audio, 4s chunks, 2s min overlap."""
+        # Create 11-second audio
+        audio = generate_sine_wave_audio(duration_sec=11.0, sample_rate=16000, channels=1)
         
-        chunks = break_into_chunks(audio, chunk_size=2000, fade_duration=50)  # 2-second chunks
+        chunks = break_into_chunks(audio, mode='min_overlap', chunk_duration=4000, min_overlap=2000, fade_duration=50)
+        expected_chunks = calculate_expected_chunks(11000, 4000, 'min_overlap', 2000)
         
-        assert isinstance(chunks, list)
-        assert len(chunks) == 0  # No chunks possible
+        print(f"Expected: {expected_chunks}, Got: {len(chunks)}")  # Debug
+        assert len(chunks) == expected_chunks == 5  # Should be 5 chunks
+        
+        # All chunks should be 4 seconds
+        for chunk in chunks:
+            assert_audio_properties(chunk, expected_sample_rate=16000, expected_channels=1, expected_duration=4.0)
     
-    def test_break_into_chunks_exact_size(self):
-        """Test chunking audio that exactly fits chunk size."""
-        # Create 5-second audio
-        audio = generate_sine_wave_audio(duration_sec=5.0, sample_rate=44100, channels=1)
+    def test_break_into_chunks_min_overlap_calculations(self):
+        """Test min overlap with different calculated scenarios."""
+        test_cases = [
+            # (audio_ms, chunk_ms, min_overlap_ms, expected_chunks)
+            (8000, 3000, 1000, 3),  # 8s audio, 3s chunks, 1s overlap → step=2s → (8-3)/2+1 = 3.5 → 4 chunks
+            (6000, 4000, 0, 2),     # 6s audio, 4s chunks, 0s overlap → step=4s → (6-4)/4+1 = 1.5 → 2 chunks  
+            (12000, 5000, 2000, 3), # 12s audio, 5s chunks, 2s overlap → step=3s → (12-5)/3+1 = 3.33 → 4 chunks
+        ]
         
-        chunks = break_into_chunks(audio, chunk_size=5000, fade_duration=50)  # 5-second chunks
-        
-        assert isinstance(chunks, list)
-        assert len(chunks) == 1
-        assert_audio_properties(chunks[0], expected_sample_rate=44100, expected_channels=1, expected_duration=5.0)
+        for audio_ms, chunk_ms, overlap_ms, expected in test_cases:
+            audio = generate_sine_wave_audio(duration_sec=audio_ms/1000, sample_rate=16000, channels=1)
+            chunks = break_into_chunks(audio, mode='min_overlap', chunk_duration=chunk_ms, min_overlap=overlap_ms)
+            calculated_expected = calculate_expected_chunks(audio_ms, chunk_ms, 'min_overlap', overlap_ms)
+            
+            print(f"Audio: {audio_ms}ms, Chunk: {chunk_ms}ms, Overlap: {overlap_ms}ms")
+            print(f"Expected: {calculated_expected}, Got: {len(chunks)}")
+            
+            assert len(chunks) == calculated_expected
     
-    def test_break_into_chunks_different_sizes(self):
-        """Test different chunk sizes."""
-        audio = generate_sine_wave_audio(duration_sec=6.0, sample_rate=44100, channels=1)
+    def test_break_into_chunks_max_overlap_calculations(self):
+        """Test max overlap with precise calculations."""
+        test_cases = [
+            # (audio_ms, chunk_ms, max_overlap_ms, expected_chunks)
+            (10000, 4000, 1000, 3),  # 10s audio, 4s chunks, max 1s overlap → step=3s → (10-4)/3+1 = 3 chunks
+            (8000, 3000, 0, 2),      # 8s audio, 3s chunks, max 0s overlap → step=3s → (8-3)/3+1 = 2.66 → 2 chunks
+            (12000, 4000, 2000, 5),  # 12s audio, 4s chunks, max 2s overlap → step=2s → (12-4)/2+1 = 5 chunks
+        ]
         
-        # Test 1-second chunks
-        chunks_1s = break_into_chunks(audio, chunk_size=1000, fade_duration=50)
-        assert len(chunks_1s) == 6
-        
-        # Test 3-second chunks
-        chunks_3s = break_into_chunks(audio, chunk_size=3000, fade_duration=50)
-        assert len(chunks_3s) == 2
+        for audio_ms, chunk_ms, overlap_ms, _ in test_cases:
+            audio = generate_sine_wave_audio(duration_sec=audio_ms/1000, sample_rate=16000, channels=1)
+            chunks = break_into_chunks(audio, mode='max_overlap', chunk_duration=chunk_ms, max_overlap=overlap_ms)
+            calculated_expected = calculate_expected_chunks(audio_ms, chunk_ms, 'max_overlap', overlap_ms)
+            
+            print(f"Audio: {audio_ms}ms, Chunk: {chunk_ms}ms, Max overlap: {overlap_ms}ms")
+            print(f"Expected: {calculated_expected}, Got: {len(chunks)}")
+            
+            assert len(chunks) == calculated_expected
+            
+            # All chunks should be the expected duration
+            for chunk in chunks:
+                assert_audio_properties(chunk, expected_sample_rate=16000, expected_channels=1, expected_duration=chunk_ms/1000)
     
-    def test_break_into_chunks_mono_and_stereo(self):
-        """Test chunking both mono and stereo audio."""
-        # Mono audio
-        mono_audio = generate_sine_wave_audio(duration_sec=4.0, sample_rate=22050, channels=1)
-        mono_chunks = break_into_chunks(mono_audio, chunk_size=1000, fade_duration=25)
+    def test_break_into_chunks_edge_cases(self):
+        """Test edge cases for all modes."""
+        # Short audio (shorter than chunk size)
+        short_audio = generate_sine_wave_audio(duration_sec=2.0, sample_rate=16000, channels=1)
         
-        assert len(mono_chunks) == 4
-        for chunk in mono_chunks:
-            assert_audio_properties(chunk, expected_sample_rate=22050, expected_channels=1, expected_duration=1.0)
+        # Test exact_count mode: should return exactly chunk_count copies of padded audio
+        chunks_exact = break_into_chunks(short_audio, mode='exact_count', chunk_count=5, chunk_duration=4000)
+        assert len(chunks_exact) == 5  # Exactly 5 chunks as requested
+        for chunk in chunks_exact:
+            assert abs(chunk.duration - 4.0) < 0.1  # Each chunk is 4.0s (padded)
         
-        # Stereo audio
-        stereo_audio = generate_sine_wave_audio(duration_sec=4.0, sample_rate=22050, channels=2)
-        stereo_chunks = break_into_chunks(stereo_audio, chunk_size=1000, fade_duration=25)
+        # Min/max overlap modes should return 1 chunk of padded audio
+        chunks_min = break_into_chunks(short_audio, mode='min_overlap', chunk_duration=4000, min_overlap=1000)  
+        chunks_max = break_into_chunks(short_audio, mode='max_overlap', chunk_duration=4000, max_overlap=1000)
         
-        assert len(stereo_chunks) == 4
-        for chunk in stereo_chunks:
-            assert_audio_properties(chunk, expected_sample_rate=22050, expected_channels=2, expected_duration=1.0)
+        assert len(chunks_min) == 1  
+        assert len(chunks_max) == 1
+        
+        # Verify min/max overlap return padded audio (4.0s, not original 2.0s)
+        for chunks in [chunks_min, chunks_max]:
+            assert abs(chunks[0].duration - 4.0) < 0.1  # Padded to chunk_duration
+    
+    def test_break_into_chunks_invalid_parameters(self):
+        """Test error handling for invalid parameters."""
+        audio = generate_sine_wave_audio(duration_sec=5.0, sample_rate=16000, channels=1)
+        
+        # Invalid mode
+        with pytest.raises(ValueError, match="Unknown mode"):
+            break_into_chunks(audio, mode='invalid_mode')
+        
+        # Missing required parameters for exact_count
+        with pytest.raises(ValueError, match="requires 'chunk_count' and 'chunk_duration'"):
+            break_into_chunks(audio, mode='exact_count', chunk_count=3)
+        
+        with pytest.raises(ValueError, match="requires 'chunk_count' and 'chunk_duration'"):
+            break_into_chunks(audio, mode='exact_count', chunk_duration=4000)
+    
+    def test_break_into_chunks_stereo_audio(self):
+        """Test all modes work with stereo audio."""
+        stereo_audio = generate_sine_wave_audio(duration_sec=8.0, sample_rate=22050, channels=2)
+        
+        chunks_exact = break_into_chunks(stereo_audio, mode='exact_count', chunk_count=2, chunk_duration=3000)
+        chunks_min = break_into_chunks(stereo_audio, mode='min_overlap', chunk_duration=3000, min_overlap=500)
+        chunks_max = break_into_chunks(stereo_audio, mode='max_overlap', chunk_duration=3000, max_overlap=1000)
+        
+        # All should handle stereo correctly
+        for chunks in [chunks_exact, chunks_min, chunks_max]:
+            assert len(chunks) > 0
+            for chunk in chunks:
+                assert_audio_properties(chunk, expected_sample_rate=22050, expected_channels=2, expected_duration=3.0)
 
 
 class TestNormalizeAudioRms:
@@ -511,3 +602,434 @@ class TestTrimAudio:
         
         # Loose threshold should result in shorter audio
         assert trimmed_loose.duration < trimmed_strict.duration
+
+
+class TestBreakIntoChunksExactCount:
+    """Test exact_count mode with comprehensive edge cases."""
+    
+    def test_exact_count_basic_cases(self):
+        """Test basic exact count functionality with calculated expectations."""
+        test_cases = [
+            # (audio_sec, chunk_count, chunk_duration_ms, expected_chunks)
+            (10.0, 3, 4000, 3),  # 10s audio, 3 chunks of 4s each
+            (8.0, 2, 5000, 2),   # 8s audio, 2 chunks of 5s each  
+            (12.0, 4, 3000, 4),  # 12s audio, 4 chunks of 3s each
+        ]
+        
+        for audio_sec, chunk_count, chunk_duration_ms, expected in test_cases:
+            audio = generate_sine_wave_audio(duration_sec=audio_sec, sample_rate=16000, channels=1)
+            chunks = break_into_chunks(audio, mode='exact_count', 
+                                     chunk_count=chunk_count, 
+                                     chunk_duration=chunk_duration_ms, 
+                                     fade_duration=50)
+            
+            assert len(chunks) == expected == chunk_count
+            
+            # All chunks should have the specified duration
+            for chunk in chunks:
+                expected_duration = chunk_duration_ms / 1000
+                assert_audio_properties(chunk, expected_sample_rate=16000, expected_channels=1, expected_duration=expected_duration)
+    
+    def test_exact_count_single_chunk(self):
+        """Test exact count with single chunk (chunk_count=1)."""
+        audio = generate_sine_wave_audio(duration_sec=8.0, sample_rate=16000, channels=1)
+        chunks = break_into_chunks(audio, mode='exact_count', chunk_count=1, chunk_duration=3000)
+        
+        assert len(chunks) == 1
+        # Single chunk should be 3s and centered in the 8s audio
+        assert_audio_properties(chunks[0], expected_sample_rate=16000, expected_channels=1, expected_duration=3.0)
+    
+    def test_exact_count_chunk_longer_than_audio(self):
+        """Test exact count when chunk duration > audio duration."""
+        # 3s audio with 5s chunk duration
+        audio = generate_sine_wave_audio(duration_sec=3.0, sample_rate=16000, channels=1)
+        chunks = break_into_chunks(audio, mode='exact_count', chunk_count=2, chunk_duration=5000)
+        
+        assert len(chunks) == 2
+        # Each chunk should still be the requested duration, with padding/overlap as needed
+        for chunk in chunks:
+            assert_audio_properties(chunk, expected_sample_rate=16000, expected_channels=1, expected_duration=5.0)
+    
+    def test_exact_count_zero_chunks(self):
+        """Test exact count with chunk_count=0."""
+        audio = generate_sine_wave_audio(duration_sec=5.0, sample_rate=16000, channels=1)
+        chunks = break_into_chunks(audio, mode='exact_count', chunk_count=0, chunk_duration=2000)
+        
+        assert len(chunks) == 0
+    
+    def test_exact_count_stereo(self):
+        """Test exact count with stereo audio."""
+        audio = generate_sine_wave_audio(duration_sec=6.0, sample_rate=22050, channels=2)
+        chunks = break_into_chunks(audio, mode='exact_count', chunk_count=3, chunk_duration=2000)
+        
+        assert len(chunks) == 3
+        for chunk in chunks:
+            assert_audio_properties(chunk, expected_sample_rate=22050, expected_channels=2, expected_duration=2.0)
+
+
+class TestBreakIntoChunksMinOverlap:
+    """Test min_overlap mode with comprehensive edge cases."""
+    
+    def test_min_overlap_your_specific_case(self):
+        """Test your specific use case: 11s audio, 4s chunks, 2s min overlap."""
+        audio = generate_sine_wave_audio(duration_sec=11.0, sample_rate=16000, channels=1)
+        chunks = break_into_chunks(audio, mode='min_overlap', chunk_duration=4000, min_overlap=2000)
+        
+        # Calculate expected: step_size = 4000 - 2000 = 2000ms
+        # remaining = 11000 - 4000 = 7000ms  
+        # chunks = 1 + ceil(7000/2000) = 1 + 4 = 5 chunks
+        expected_chunks = calculate_expected_chunks(11000, 4000, 'min_overlap', 2000)
+        assert len(chunks) == expected_chunks == 5
+        
+        # All chunks should be 4 seconds
+        for chunk in chunks:
+            assert_audio_properties(chunk, expected_sample_rate=16000, expected_channels=1, expected_duration=4.0)
+    
+    def test_min_overlap_calculated_cases(self):
+        """Test min overlap with precisely calculated expectations."""
+        test_cases = [
+            # (audio_ms, chunk_ms, min_overlap_ms, expected_chunks)
+            (8000, 3000, 1000, 4),   # step=2000, remaining=5000, chunks=1+ceil(5000/2000)=4
+            (6000, 4000, 0, 2),      # step=4000, remaining=2000, chunks=1+ceil(2000/4000)=2  
+            (9000, 2000, 500, 6),    # Even spacing with 600ms overlap (>500ms min)
+            (12000, 5000, 2000, 4),  # step=3000, remaining=7000, chunks=1+ceil(7000/3000)=4
+        ]
+        
+        for audio_ms, chunk_ms, overlap_ms, expected in test_cases:
+            audio = generate_sine_wave_audio(duration_sec=audio_ms/1000, sample_rate=16000, channels=1)
+            chunks = break_into_chunks(audio, mode='min_overlap', chunk_duration=chunk_ms, min_overlap=overlap_ms)
+            calculated_expected = calculate_expected_chunks(audio_ms, chunk_ms, 'min_overlap', overlap_ms)
+            
+            assert len(chunks) == calculated_expected == expected
+            
+            # All chunks should have the specified duration
+            for chunk in chunks:
+                assert_audio_properties(chunk, expected_sample_rate=16000, expected_channels=1, expected_duration=chunk_ms/1000)
+    
+    def test_min_overlap_zero_overlap(self):
+        """Test min overlap with 0 overlap (still ensures full coverage)."""
+        audio = generate_sine_wave_audio(duration_sec=10.0, sample_rate=16000, channels=1)
+        chunks = break_into_chunks(audio, mode='min_overlap', chunk_duration=3000, min_overlap=0)
+        
+        # With 0 min overlap, should still create overlapping chunks for full coverage
+        # step_size = 3000, remaining = 7000, chunks = 1 + ceil(7000/3000) = 4
+        expected = calculate_expected_chunks(10000, 3000, 'min_overlap', 0)
+        assert len(chunks) == expected
+    
+    def test_min_overlap_exceeds_chunk_duration(self):
+        """Test min overlap when overlap >= chunk duration."""
+        audio = generate_sine_wave_audio(duration_sec=8.0, sample_rate=16000, channels=1)
+        chunks = break_into_chunks(audio, mode='min_overlap', chunk_duration=3000, min_overlap=3500)
+        
+        # Should still work with heavily overlapping chunks
+        assert len(chunks) >= 2  # Should create multiple chunks
+        for chunk in chunks:
+            assert_audio_properties(chunk, expected_sample_rate=16000, expected_channels=1, expected_duration=3.0)
+    
+    def test_min_overlap_short_audio(self):
+        """Test min overlap with audio shorter than chunk duration."""
+        audio = generate_sine_wave_audio(duration_sec=2.0, sample_rate=16000, channels=1)
+        chunks = break_into_chunks(audio, mode='min_overlap', chunk_duration=5000, min_overlap=1000)
+        
+        assert len(chunks) == 1
+        assert_audio_properties(chunks[0], expected_sample_rate=16000, expected_channels=1, expected_duration=5.0)  # Padded to chunk_duration
+
+
+class TestBreakIntoChunksMaxOverlap:
+    """Test max_overlap mode with comprehensive edge cases."""
+    
+    def test_max_overlap_calculated_cases(self):
+        """Test max overlap with precisely calculated expectations."""  
+        test_cases = [
+            # (audio_ms, chunk_ms, max_overlap_ms, expected_chunks)
+            (10000, 4000, 1000, 3),  # step=3000, remaining=6000, chunks=1+floor(6000/3000)=3
+            (8000, 3000, 0, 2),      # step=3000, remaining=5000, chunks=1+floor(5000/3000)=2
+            (12000, 4000, 2000, 5),  # step=2000, remaining=8000, chunks=1+floor(8000/2000)=5
+            (15000, 5000, 1500, 3),  # step=3500, remaining=10000, chunks=1+floor(10000/3500)=3
+        ]
+        
+        for audio_ms, chunk_ms, overlap_ms, expected in test_cases:
+            audio = generate_sine_wave_audio(duration_sec=audio_ms/1000, sample_rate=16000, channels=1)
+            chunks = break_into_chunks(audio, mode='max_overlap', chunk_duration=chunk_ms, max_overlap=overlap_ms)
+            calculated_expected = calculate_expected_chunks(audio_ms, chunk_ms, 'max_overlap', overlap_ms)
+            
+            assert len(chunks) == calculated_expected == expected
+            
+            # All chunks should have the specified duration
+            for chunk in chunks:
+                assert_audio_properties(chunk, expected_sample_rate=16000, expected_channels=1, expected_duration=chunk_ms/1000)
+    
+    def test_max_overlap_zero_overlap(self):
+        """Test max overlap with 0 overlap (non-overlapping chunks)."""
+        audio = generate_sine_wave_audio(duration_sec=10.0, sample_rate=16000, channels=1)
+        chunks = break_into_chunks(audio, mode='max_overlap', chunk_duration=4000, max_overlap=0)
+        
+        # step = 4000, remaining = 6000, chunks = 1 + floor(6000/4000) = 2 
+        expected = calculate_expected_chunks(10000, 4000, 'max_overlap', 0)
+        assert len(chunks) == expected == 2
+    
+    def test_max_overlap_exceeds_chunk_duration(self):
+        """Test max overlap when overlap >= chunk duration."""
+        audio = generate_sine_wave_audio(duration_sec=8.0, sample_rate=16000, channels=1)
+        chunks = break_into_chunks(audio, mode='max_overlap', chunk_duration=3000, max_overlap=3500)
+        
+        # Should return only 1 chunk when max_overlap >= chunk_duration
+        assert len(chunks) == 1
+        assert_audio_properties(chunks[0], expected_sample_rate=16000, expected_channels=1, expected_duration=3.0)
+    
+    def test_max_overlap_short_audio(self):
+        """Test max overlap with audio shorter than chunk duration."""
+        audio = generate_sine_wave_audio(duration_sec=2.0, sample_rate=16000, channels=1)
+        chunks = break_into_chunks(audio, mode='max_overlap', chunk_duration=5000, max_overlap=1000)
+        
+        assert len(chunks) == 1
+        assert_audio_properties(chunks[0], expected_sample_rate=16000, expected_channels=1, expected_duration=5.0)  # Padded to chunk_duration
+
+
+class TestBreakIntoChunksReturnTimings:
+    """Test return_timings functionality and verify spacing/overlap properties."""
+    
+    def test_exact_count_even_spacing_and_coverage(self):
+        """Test exact_count has even spacing and full coverage."""
+        audio = generate_sine_wave_audio(duration_sec=12.0, sample_rate=16000, channels=1)
+        chunks, timings = break_into_chunks(audio, mode='exact_count', chunk_count=4, chunk_duration=3000, return_timings=True)
+        
+        assert len(chunks) == len(timings) == 4
+        
+        # All chunks should be exactly 3 seconds
+        for chunk in chunks:
+            assert_audio_properties(chunk, expected_sample_rate=16000, expected_channels=1, expected_duration=3.0)
+        
+        # First chunk starts at 0, last ends at 12
+        assert abs(timings[0][0] - 0.0) < 0.01
+        assert abs(timings[-1][1] - 12.0) < 0.01
+        
+        # Check even spacing - calculate step size between chunk starts
+        starts = [timing[0] for timing in timings]
+        steps = [starts[i+1] - starts[i] for i in range(len(starts)-1)]
+        
+        # All steps should be equal (even spacing)
+        for i in range(1, len(steps)):
+            assert abs(steps[i] - steps[0]) < 0.01, f"Uneven spacing: steps = {steps}"
+    
+    def test_min_overlap_constraints_and_coverage(self):
+        """Test min_overlap respects minimum overlap and has full coverage."""
+        audio = generate_sine_wave_audio(duration_sec=11.0, sample_rate=16000, channels=1)  
+        chunks, timings = break_into_chunks(audio, mode='min_overlap', chunk_duration=4000, min_overlap=2000, return_timings=True)
+        
+        assert len(chunks) == 5
+        
+        # All chunks should be exactly 4 seconds
+        for chunk in chunks:
+            assert_audio_properties(chunk, expected_sample_rate=16000, expected_channels=1, expected_duration=4.0)
+        
+        # Full coverage: first starts at 0, last ends at 11
+        assert abs(timings[0][0] - 0.0) < 0.01
+        assert abs(timings[-1][1] - 11.0) < 0.01
+        
+        # Check minimum overlap constraint
+        for i in range(1, len(timings)):
+            prev_end = timings[i-1][1]
+            curr_start = timings[i][0]
+            actual_overlap = prev_end - curr_start
+            assert actual_overlap >= 2.0 - 0.01, f"Overlap {actual_overlap:.3f}s < minimum 2.0s between chunks {i-1} and {i}"
+        
+        # Check even spacing of chunk starts
+        starts = [timing[0] for timing in timings]
+        steps = [starts[i+1] - starts[i] for i in range(len(starts)-1)]
+        
+        # All steps should be equal (even spacing)
+        for i in range(1, len(steps)):
+            assert abs(steps[i] - steps[0]) < 0.01, f"Uneven spacing in min_overlap: steps = {steps}"
+    
+    def test_max_overlap_constraints_and_coverage(self):
+        """Test max_overlap respects maximum overlap constraint."""
+        audio = generate_sine_wave_audio(duration_sec=10.0, sample_rate=16000, channels=1)
+        chunks, timings = break_into_chunks(audio, mode='max_overlap', chunk_duration=4000, max_overlap=1000, return_timings=True)
+        
+        assert len(chunks) == 3  # Should create 3 chunks with this configuration
+        
+        # All chunks should be exactly 4 seconds
+        for chunk in chunks:
+            assert_audio_properties(chunk, expected_sample_rate=16000, expected_channels=1, expected_duration=4.0)
+        
+        # First starts at 0, last ends at 10
+        assert abs(timings[0][0] - 0.0) < 0.01
+        assert abs(timings[-1][1] - 10.0) < 0.01
+        
+        # Check maximum overlap constraint
+        for i in range(1, len(timings)):
+            prev_end = timings[i-1][1]
+            curr_start = timings[i][0]
+            actual_overlap = prev_end - curr_start
+            assert actual_overlap <= 1.0 + 0.01, f"Overlap {actual_overlap:.3f}s > maximum 1.0s between chunks {i-1} and {i}"
+        
+        # Check even spacing of chunk starts
+        starts = [timing[0] for timing in timings]
+        steps = [starts[i+1] - starts[i] for i in range(len(starts)-1)]
+        
+        # All steps should be equal (even spacing)
+        for i in range(1, len(steps)):
+            assert abs(steps[i] - steps[0]) < 0.01, f"Uneven spacing in max_overlap: steps = {steps}"
+    
+    def test_zero_overlap_max_overlap(self):
+        """Test max_overlap with 0 overlap produces non-overlapping chunks."""
+        audio = generate_sine_wave_audio(duration_sec=9.0, sample_rate=16000, channels=1)
+        chunks, timings = break_into_chunks(audio, mode='max_overlap', chunk_duration=3000, max_overlap=0, return_timings=True)
+        
+        assert len(chunks) == 3  # Should fit 3 non-overlapping 3s chunks in 9s
+        
+        # Check no overlap (actually gap between chunks)
+        for i in range(1, len(timings)):
+            prev_end = timings[i-1][1]
+            curr_start = timings[i][0]
+            gap = curr_start - prev_end
+            assert gap >= -0.01, f"Overlap detected: gap = {gap:.3f}s (should be >= 0)"
+    
+    def test_your_specific_case_with_timing_verification(self):
+        """Test your specific case: 11s audio, 4s chunks, 2s min overlap with detailed verification."""
+        audio = generate_sine_wave_audio(duration_sec=11.0, sample_rate=16000, channels=1)
+        chunks, timings = break_into_chunks(audio, mode='min_overlap', chunk_duration=4000, min_overlap=2000, return_timings=True)
+        
+        # Should create exactly 5 chunks
+        assert len(chunks) == 5
+        
+        # Print timing details for verification
+        print("\\nYour specific case - Timing verification:")
+        for i, (start, end) in enumerate(timings):
+            overlap = 0 if i == 0 else max(0, timings[i-1][1] - start)
+            print(f"  Chunk {i+1}: {start:.1f}s to {end:.1f}s (overlap: {overlap:.1f}s)")
+        
+        # Verify properties:
+        # 1. All chunks are exactly 4s
+        for chunk in chunks:
+            assert_audio_properties(chunk, expected_sample_rate=16000, expected_channels=1, expected_duration=4.0)
+        
+        # 2. Full coverage: 0 to 11s
+        assert abs(timings[0][0] - 0.0) < 0.01
+        assert abs(timings[-1][1] - 11.0) < 0.01
+        
+        # 3. Minimum overlap of 2s maintained
+        for i in range(1, len(timings)):
+            prev_end = timings[i-1][1]
+            curr_start = timings[i][0]
+            actual_overlap = prev_end - curr_start
+            assert actual_overlap >= 2.0 - 0.01, f"Chunk {i}: overlap {actual_overlap:.3f}s < minimum 2.0s"
+        
+        # 4. Even spacing
+        starts = [timing[0] for timing in timings]
+        steps = [starts[i+1] - starts[i] for i in range(len(starts)-1)]
+        for i in range(1, len(steps)):
+            assert abs(steps[i] - steps[0]) < 0.01, f"Uneven spacing: {steps}"
+    
+    def test_return_timings_false_default(self):
+        """Test that return_timings=False returns only chunks."""
+        audio = generate_sine_wave_audio(duration_sec=8.0, sample_rate=16000, channels=1)
+        result = break_into_chunks(audio, mode='exact_count', chunk_count=2, chunk_duration=3000)
+        
+        # Should return list, not tuple
+        assert isinstance(result, list)
+        assert len(result) == 2
+        assert all(isinstance(chunk, AudioSamples) for chunk in result)
+
+
+class TestBreakIntoChunksEdgeCases:
+    """Test edge cases and error conditions for all modes."""
+    
+    def test_invalid_mode(self):
+        """Test error handling for invalid mode."""
+        audio = generate_sine_wave_audio(duration_sec=5.0, sample_rate=16000, channels=1)
+        
+        with pytest.raises(ValueError, match="Unknown mode"):
+            break_into_chunks(audio, mode='invalid_mode')
+    
+    def test_exact_count_missing_parameters(self):
+        """Test error handling for missing exact_count parameters."""
+        audio = generate_sine_wave_audio(duration_sec=5.0, sample_rate=16000, channels=1)
+        
+        with pytest.raises(ValueError, match="requires 'chunk_count' and 'chunk_duration'"):
+            break_into_chunks(audio, mode='exact_count', chunk_count=3)
+        
+        with pytest.raises(ValueError, match="requires 'chunk_count' and 'chunk_duration'"):
+            break_into_chunks(audio, mode='exact_count', chunk_duration=4000)
+        
+        with pytest.raises(ValueError, match="requires 'chunk_count' and 'chunk_duration'"):
+            break_into_chunks(audio, mode='exact_count')
+    
+    def test_very_short_audio(self):
+        """Test all modes with extremely short audio."""
+        # 0.1 second audio
+        audio = generate_sine_wave_audio(duration_sec=0.1, sample_rate=16000, channels=1)
+        
+        # exact_count mode will still create the requested number of chunks
+        chunks_exact = break_into_chunks(audio, mode='exact_count', chunk_count=5, chunk_duration=2000)
+        assert len(chunks_exact) == 5  # Should create exactly 5 chunks as requested
+        # Each chunk will be padded to chunk_duration
+        for chunk in chunks_exact:
+            assert abs(chunk.duration - 2.0) < 0.01  # Padded to chunk_duration
+        
+        # min/max_overlap modes should return single chunk for short audio
+        chunks_min = break_into_chunks(audio, mode='min_overlap', chunk_duration=2000, min_overlap=500)
+        chunks_max = break_into_chunks(audio, mode='max_overlap', chunk_duration=2000, max_overlap=500)
+        
+        assert len(chunks_min) == 1
+        assert len(chunks_max) == 1
+        
+        # Should be padded to chunk_duration
+        assert abs(chunks_min[0].duration - 2.0) < 0.01  # Padded to chunk_duration
+        assert abs(chunks_max[0].duration - 2.0) < 0.01  # Padded to chunk_duration
+    
+    def test_very_large_chunk_count(self):
+        """Test exact_count with very large chunk_count."""
+        audio = generate_sine_wave_audio(duration_sec=5.0, sample_rate=16000, channels=1)
+        
+        # Request 100 chunks of 1s each from 5s audio - creates heavy overlap
+        chunks = break_into_chunks(audio, mode='exact_count', chunk_count=100, chunk_duration=1000)
+        
+        assert len(chunks) == 100
+        
+        # All chunks should be exactly 1s (now that we fixed the implementation)
+        for chunk in chunks:
+            assert_audio_properties(chunk, expected_sample_rate=16000, expected_channels=1, expected_duration=1.0)
+    
+    def test_different_sample_rates(self):
+        """Test all modes work with different sample rates."""
+        sample_rates = [8000, 16000, 22050, 44100, 48000]
+        
+        for sr in sample_rates:
+            audio = generate_sine_wave_audio(duration_sec=6.0, sample_rate=sr, channels=1)
+            
+            chunks_exact = break_into_chunks(audio, mode='exact_count', chunk_count=2, chunk_duration=2000)
+            chunks_min = break_into_chunks(audio, mode='min_overlap', chunk_duration=2000, min_overlap=500)
+            chunks_max = break_into_chunks(audio, mode='max_overlap', chunk_duration=2000, max_overlap=500)
+            
+            # All should work and preserve sample rate
+            for chunks in [chunks_exact, chunks_min, chunks_max]:
+                assert len(chunks) > 0
+                for chunk in chunks:
+                    assert chunk.sample_rate == sr
+    
+    def test_mono_and_stereo_consistency(self):
+        """Test that mono and stereo audio produce consistent chunk counts."""
+        # Same duration and parameters for mono and stereo
+        mono_audio = generate_sine_wave_audio(duration_sec=8.0, sample_rate=16000, channels=1)
+        stereo_audio = generate_sine_wave_audio(duration_sec=8.0, sample_rate=16000, channels=2)
+        
+        for mode_params in [
+            {'mode': 'exact_count', 'chunk_count': 3, 'chunk_duration': 3000},
+            {'mode': 'min_overlap', 'chunk_duration': 3000, 'min_overlap': 1000},
+            {'mode': 'max_overlap', 'chunk_duration': 3000, 'max_overlap': 1500},
+        ]:
+            mono_chunks = break_into_chunks(mono_audio, **mode_params)
+            stereo_chunks = break_into_chunks(stereo_audio, **mode_params)
+            
+            # Should produce same number of chunks
+            assert len(mono_chunks) == len(stereo_chunks)
+            
+            # Verify channel counts
+            for chunk in mono_chunks:
+                assert chunk.audio_data.shape[0] == 1
+            for chunk in stereo_chunks:
+                assert chunk.audio_data.shape[0] == 2
+
+

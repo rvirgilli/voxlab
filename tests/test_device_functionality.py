@@ -125,7 +125,7 @@ class TestPreprocessingDevicePreservation:
         assert normalized.device.type == expected_device
         
         # Test break_into_chunks preserves device for all chunks
-        chunks = break_into_chunks(gpu_audio, chunk_size=500, inplace=False)
+        chunks = break_into_chunks(gpu_audio, mode='exact_count', chunk_count=2, chunk_duration=500, inplace=False)
         assert len(chunks) > 0
         for i, chunk in enumerate(chunks):
             assert chunk.device.type == expected_device, f"Chunk {i} should be on {expected_device}"
@@ -219,7 +219,7 @@ class TestPipelineDeviceAwareness:
         
         pipeline = PreprocessingPipeline()
         pipeline.add_step(resample_audio, new_sample_rate=16000)
-        pipeline.add_step(break_into_chunks, chunk_size=1000)  # 1 second chunks
+        pipeline.add_step(break_into_chunks, mode='exact_count', chunk_count=2, chunk_duration=1000)  # 1 second chunks
         
         chunks = pipeline.process(gpu_audio)
         assert len(chunks) > 0
