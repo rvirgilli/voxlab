@@ -9,8 +9,8 @@ A comprehensive Python toolbox for audio processing using PyTorch. VoxLab provid
 - **Comprehensive Preprocessing Pipeline**: Resampling, mono conversion, silence removal, chunking, and RMS normalization
 <!-- - **Voice Embedding Extraction**: ECAPA2 model support via Hugging Face Hub (Coming Soon) -->
 - **WebM Format Support**: Full support for WebM audio files via librosa fallback
-- **Mathematical Audio Chunking**: Precise chunk positioning using range covering algorithm
-- **Extensive Testing**: 121 passing tests covering all functionality
+- **Mathematical Audio Chunking**: Precise chunk positioning using range covering algorithm with multiple modes
+- **Extensive Testing**: 141 passing tests covering all functionality
 
 ## Installation
 
@@ -82,15 +82,19 @@ from voxlab.preprocessing.functions import break_into_chunks
 # Exact number of chunks with precise mathematical positioning
 chunks = break_into_chunks(audio, mode='exact_count', chunk_count=5, chunk_duration=4000)
 
-# Minimum chunks with maximum overlap constraint  
+# Minimum chunks with maximum overlap constraint
 chunks = break_into_chunks(audio, mode='min_overlap', chunk_duration=3000, min_overlap=1000)
 
 # Maximum chunks with minimum spacing constraint
 chunks = break_into_chunks(audio, mode='max_overlap', chunk_duration=4000, max_overlap=2000)
 
+# Split at specific time points with optional overlap
+chunks = break_into_chunks(audio, mode='split_by_time',
+                          split_points=[3000, 7000], overlap=1000)
+
 # Get timing information for each chunk
-chunks, timings = break_into_chunks(audio, mode='exact_count', 
-                                   chunk_count=3, chunk_duration=5000, 
+chunks, timings = break_into_chunks(audio, mode='exact_count',
+                                   chunk_count=3, chunk_duration=5000,
                                    return_timings=True)
 print(f"Generated {len(chunks)} chunks")
 for i, (start, end) in enumerate(timings):
@@ -194,16 +198,17 @@ assert id(result) != id(audio)  # New object created
 - **`resample_audio()`**: Device-preserving resampling with configurable sample rates
 - **`convert_to_mono()`**: Stereo-to-mono conversion with channel selection
 - **`remove_silence()`**: Intelligent silence removal with fade transitions
-- **`break_into_chunks()`**: Mathematical audio segmentation with precise positioning and three chunking modes
+- **`break_into_chunks()`**: Mathematical audio segmentation with precise positioning and four chunking modes
 - **`normalize_audio_rms()`**: RMS-based normalization to target dB levels
 - **`trim_audio()`**: Silence trimming from start, end, or both ends with configurable threshold
 
 ### Audio Chunking Algorithm
-VoxLab uses a mathematical range covering algorithm for precise audio chunking:
+VoxLab uses a mathematical range covering algorithm for precise audio chunking with four modes:
 
 - **`exact_count`**: Create exactly N chunks with evenly-distributed positioning and calculated spacing
 - **`min_overlap`**: Find minimum number of chunks needed while satisfying minimum overlap constraints
 - **`max_overlap`**: Generate maximum number of chunks possible while respecting maximum overlap limits
+- **`split_by_time`**: Split at explicit time points with optional overlap centered around boundaries
 
 All modes handle positive spacing (gaps), zero spacing (touching), and negative spacing (overlaps) automatically. Chunks maintain exact duration with fade-in/fade-out transitions and preserve device placement.
 
@@ -220,10 +225,10 @@ source venv/bin/activate  # or conda activate voxlab
 pytest tests/ -v
 ```
 
-**Current Status: ✅ 121 tests passing**
+**Current Status: ✅ 141 tests passing**
 - AudioSamples core functionality (23 tests)
-- Device awareness and GPU operations (12 tests)  
-- Preprocessing functions (67 tests) including comprehensive chunking tests
+- Device awareness and GPU operations (12 tests)
+- Preprocessing functions (87 tests) including comprehensive chunking tests
 - Pipeline system (11 tests)
 - Silence detection and utilities (8 tests)
 

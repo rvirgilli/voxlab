@@ -1033,3 +1033,287 @@ class TestBreakIntoChunksEdgeCases:
                 assert chunk.audio_data.shape[0] == 2
 
 
+class TestBreakIntoChunksSplitByTime:
+    """Test split_by_time mode with comprehensive cases."""
+
+    def test_split_by_time_basic(self):
+        """Test basic split by time with no overlap."""
+        audio = generate_sine_wave_audio(duration_sec=10.0, sample_rate=16000, channels=1)
+
+        # Split at 3s and 7s: creates chunks [0-3s], [3-7s], [7-10s]
+        chunks = break_into_chunks(audio, mode='split_by_time', split_points=[3000, 7000], overlap=0)
+
+        assert len(chunks) == 3
+        assert isinstance(chunks[0], AudioSamples)
+
+        # Verify chunk durations approximately match expected
+        assert abs(chunks[0].duration - 3.0) < 0.1  # 0 to 3s
+        assert abs(chunks[1].duration - 4.0) < 0.1  # 3 to 7s
+        assert abs(chunks[2].duration - 3.0) < 0.1  # 7 to 10s
+
+    def test_split_by_time_with_overlap(self):
+        """Test split by time with 1s overlap."""
+        audio = generate_sine_wave_audio(duration_sec=10.0, sample_rate=16000, channels=1)
+
+        # Split at 3s and 7s with 1s overlap
+        # Expected: [0-3.5s], [2.5-7.5s], [6.5-10s]
+        chunks = break_into_chunks(audio, mode='split_by_time', split_points=[3000, 7000], overlap=1000)
+
+        assert len(chunks) == 3
+
+        # Verify chunk durations with overlap
+        assert abs(chunks[0].duration - 3.5) < 0.1  # Extended by 0.5s
+        assert abs(chunks[1].duration - 5.0) < 0.1  # 2.5 to 7.5s
+        assert abs(chunks[2].duration - 3.5) < 0.1  # Extended by 0.5s
+
+    def test_split_by_time_with_timings(self):
+        """Test split by time returns correct timing information."""
+        audio = generate_sine_wave_audio(duration_sec=8.0, sample_rate=16000, channels=1)
+
+        chunks, timings = break_into_chunks(audio, mode='split_by_time',
+                                           split_points=[3000, 5000],
+                                           overlap=1000,
+                                           return_timings=True)
+
+        assert len(chunks) == len(timings) == 3
+
+        # Verify timing boundaries with 1s overlap (500ms on each side)
+        # Chunk 0: 0 to 3.5s (split at 3s + 500ms)
+        assert abs(timings[0][0] - 0.0) < 0.01
+        assert abs(timings[0][1] - 3.5) < 0.01
+
+        # Chunk 1: 2.5s to 5.5s (split at 3s - 500ms to 5s + 500ms)
+        assert abs(timings[1][0] - 2.5) < 0.01
+        assert abs(timings[1][1] - 5.5) < 0.01
+
+        # Chunk 2: 4.5s to 8s (split at 5s - 500ms to end)
+        assert abs(timings[2][0] - 4.5) < 0.01
+        assert abs(timings[2][1] - 8.0) < 0.01
+
+        # Verify actual overlap between chunks
+        overlap_1_2 = timings[0][1] - timings[1][0]
+        overlap_2_3 = timings[1][1] - timings[2][0]
+        assert abs(overlap_1_2 - 1.0) < 0.01  # 1s overlap
+        assert abs(overlap_2_3 - 1.0) < 0.01  # 1s overlap
+
+    def test_split_by_time_single_split(self):
+        """Test split by time with single split point."""
+        audio = generate_sine_wave_audio(duration_sec=6.0, sample_rate=16000, channels=1)
+
+        chunks = break_into_chunks(audio, mode='split_by_time', split_points=[3000], overlap=0)
+
+        assert len(chunks) == 2
+        assert abs(chunks[0].duration - 3.0) < 0.1  # 0 to 3s
+        assert abs(chunks[1].duration - 3.0) < 0.1  # 3 to 6s
+
+    def test_split_by_time_multiple_splits(self):
+        """Test split by time with many split points."""
+        audio = generate_sine_wave_audio(duration_sec=10.0, sample_rate=16000, channels=1)
+
+        # Split every 2 seconds
+        chunks = break_into_chunks(audio, mode='split_by_time',
+                                  split_points=[2000, 4000, 6000, 8000],
+                                  overlap=0)
+
+        assert len(chunks) == 5  # 5 segments from 4 split points
+
+        # Each chunk should be approximately 2 seconds
+        for chunk in chunks:
+            assert abs(chunk.duration - 2.0) < 0.1
+
+    def test_split_by_time_unsorted_splits(self):
+        """Test that split points are sorted automatically."""
+        audio = generate_sine_wave_audio(duration_sec=10.0, sample_rate=16000, channels=1)
+
+        # Provide unsorted split points
+        chunks = break_into_chunks(audio, mode='split_by_time',
+                                  split_points=[7000, 3000, 5000],
+                                  overlap=0)
+
+        assert len(chunks) == 4
+        # Should handle sorting internally
+
+    def test_split_by_time_duplicate_splits(self):
+        """Test that duplicate split points are removed."""
+        audio = generate_sine_wave_audio(duration_sec=8.0, sample_rate=16000, channels=1)
+
+        # Provide duplicate split points
+        chunks = break_into_chunks(audio, mode='split_by_time',
+                                  split_points=[3000, 3000, 5000, 5000],
+                                  overlap=0)
+
+        assert len(chunks) == 3  # Only 2 unique splits = 3 chunks
+
+    def test_split_by_time_overlap_at_boundaries(self):
+        """Test that overlap doesn't extend beyond audio boundaries."""
+        audio = generate_sine_wave_audio(duration_sec=6.0, sample_rate=16000, channels=1)
+
+        chunks, timings = break_into_chunks(audio, mode='split_by_time',
+                                           split_points=[3000],
+                                           overlap=2000,
+                                           return_timings=True)
+
+        # First chunk should start at 0, not negative
+        assert timings[0][0] >= 0.0
+
+        # Last chunk should end at 6s, not beyond
+        assert timings[-1][1] <= 6.0 + 0.01
+
+    def test_split_by_time_large_overlap(self):
+        """Test split by time with very large overlap."""
+        audio = generate_sine_wave_audio(duration_sec=10.0, sample_rate=16000, channels=1)
+
+        # 4s overlap on 2s segments = heavy overlap
+        chunks, timings = break_into_chunks(audio, mode='split_by_time',
+                                           split_points=[2000, 4000, 6000, 8000],
+                                           overlap=4000,
+                                           return_timings=True)
+
+        assert len(chunks) == 5
+
+        # Verify chunks have significant overlap
+        for i in range(1, len(timings)):
+            overlap = timings[i-1][1] - timings[i][0]
+            assert overlap >= 4.0 - 0.1  # Should have at least 4s overlap (minus tolerance)
+
+    def test_split_by_time_stereo(self):
+        """Test split by time with stereo audio."""
+        audio = generate_sine_wave_audio(duration_sec=8.0, sample_rate=22050, channels=2)
+
+        chunks = break_into_chunks(audio, mode='split_by_time',
+                                  split_points=[3000, 6000],
+                                  overlap=500)
+
+        assert len(chunks) == 3
+
+        # All chunks should be stereo
+        for chunk in chunks:
+            assert_audio_properties(chunk, expected_sample_rate=22050, expected_channels=2)
+
+    def test_split_by_time_invalid_split_points(self):
+        """Test error handling for invalid split points."""
+        audio = generate_sine_wave_audio(duration_sec=5.0, sample_rate=16000, channels=1)
+
+        # Split point beyond audio duration
+        with pytest.raises(ValueError, match="outside audio range"):
+            break_into_chunks(audio, mode='split_by_time', split_points=[6000], overlap=0)
+
+        # Negative split point
+        with pytest.raises(ValueError, match="outside audio range"):
+            break_into_chunks(audio, mode='split_by_time', split_points=[-1000, 3000], overlap=0)
+
+    def test_split_by_time_missing_split_points(self):
+        """Test error handling for missing split_points parameter."""
+        audio = generate_sine_wave_audio(duration_sec=5.0, sample_rate=16000, channels=1)
+
+        with pytest.raises(ValueError, match="requires 'split_points' parameter"):
+            break_into_chunks(audio, mode='split_by_time', overlap=1000)
+
+    def test_split_by_time_invalid_split_points_type(self):
+        """Test error handling for invalid split_points type."""
+        audio = generate_sine_wave_audio(duration_sec=5.0, sample_rate=16000, channels=1)
+
+        # split_points must be a list or tuple
+        with pytest.raises(ValueError, match="must be a list or tuple"):
+            break_into_chunks(audio, mode='split_by_time', split_points=3000, overlap=0)
+
+    def test_split_by_time_negative_overlap(self):
+        """Test error handling for negative overlap."""
+        audio = generate_sine_wave_audio(duration_sec=5.0, sample_rate=16000, channels=1)
+
+        with pytest.raises(ValueError, match="overlap must be non-negative"):
+            break_into_chunks(audio, mode='split_by_time', split_points=[2500], overlap=-1000)
+
+    def test_split_by_time_empty_split_points(self):
+        """Test split by time with empty split points list."""
+        audio = generate_sine_wave_audio(duration_sec=5.0, sample_rate=16000, channels=1)
+
+        # Empty list should return single chunk (entire audio)
+        chunks = break_into_chunks(audio, mode='split_by_time', split_points=[], overlap=0)
+
+        assert len(chunks) == 1
+        assert abs(chunks[0].duration - 5.0) < 0.1
+
+    def test_split_by_time_device_preservation(self):
+        """Test that split by time preserves device placement."""
+        audio = generate_sine_wave_audio(duration_sec=6.0, sample_rate=16000, channels=1)
+
+        # Test on CPU (GPU test would require CUDA)
+        chunks = break_into_chunks(audio, mode='split_by_time',
+                                  split_points=[2000, 4000],
+                                  overlap=500)
+
+        # All chunks should be on same device as original
+        for chunk in chunks:
+            assert chunk.device == audio.device
+
+    def test_split_by_time_different_sample_rates(self):
+        """Test split by time with different sample rates."""
+        sample_rates = [8000, 16000, 22050, 44100, 48000]
+
+        for sr in sample_rates:
+            audio = generate_sine_wave_audio(duration_sec=6.0, sample_rate=sr, channels=1)
+
+            chunks = break_into_chunks(audio, mode='split_by_time',
+                                      split_points=[2000, 4000],
+                                      overlap=500)
+
+            assert len(chunks) == 3
+            for chunk in chunks:
+                assert chunk.sample_rate == sr
+
+    def test_split_by_time_example_case(self):
+        """Test the example case from documentation: 0-3s, 3-5s with 1s overlap."""
+        audio = generate_sine_wave_audio(duration_sec=5.0, sample_rate=16000, channels=1)
+
+        chunks, timings = break_into_chunks(audio, mode='split_by_time',
+                                           split_points=[3000],
+                                           overlap=1000,
+                                           return_timings=True)
+
+        assert len(chunks) == 2
+
+        # First chunk: 0 to 3.5s (extended 500ms past split point)
+        assert abs(timings[0][0] - 0.0) < 0.01
+        assert abs(timings[0][1] - 3.5) < 0.01
+
+        # Second chunk: 2.5s to 5s (started 500ms before split point)
+        assert abs(timings[1][0] - 2.5) < 0.01
+        assert abs(timings[1][1] - 5.0) < 0.01
+
+        # Verify 1s overlap
+        overlap = timings[0][1] - timings[1][0]
+        assert abs(overlap - 1.0) < 0.01
+
+    def test_split_by_time_zero_overlap(self):
+        """Test split by time with explicitly zero overlap."""
+        audio = generate_sine_wave_audio(duration_sec=9.0, sample_rate=16000, channels=1)
+
+        chunks, timings = break_into_chunks(audio, mode='split_by_time',
+                                           split_points=[3000, 6000],
+                                           overlap=0,
+                                           return_timings=True)
+
+        assert len(chunks) == 3
+
+        # With 0 overlap, chunks should be exactly adjacent
+        assert abs(timings[0][1] - timings[1][0]) < 0.01  # No gap/overlap
+        assert abs(timings[1][1] - timings[2][0]) < 0.01  # No gap/overlap
+
+    def test_split_by_time_odd_overlap(self):
+        """Test split by time with odd overlap value (tests integer division)."""
+        audio = generate_sine_wave_audio(duration_sec=10.0, sample_rate=16000, channels=1)
+
+        # 1001ms overlap = 500ms on each side (floor division)
+        chunks, timings = break_into_chunks(audio, mode='split_by_time',
+                                           split_points=[5000],
+                                           overlap=1001,
+                                           return_timings=True)
+
+        assert len(chunks) == 2
+
+        # Verify overlap is approximately 1s (due to floor division of 1001/2 = 500)
+        overlap = timings[0][1] - timings[1][0]
+        assert abs(overlap - 1.0) < 0.05  # Allow some tolerance for rounding
+
+

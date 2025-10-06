@@ -614,59 +614,155 @@ def _break_into_chunks_max_overlap(audio: AudioSamples, chunk_duration=4000, max
     return chunks
 
 
+def _break_into_chunks_split_by_time(audio: AudioSamples, split_points, overlap=0, fade_duration=50, return_timings=False):
+    """
+    Break audio into chunks at explicit split points with optional overlap.
+    All operations maintain device integrity - no device transfers.
+
+    Parameters:
+    audio (AudioSamples): Audio object to process
+    split_points (list): List of split positions in milliseconds (start of audio and end are implicit)
+    overlap (int): Overlap duration in milliseconds (default: 0)
+    fade_duration (int): Duration of fade in/out in milliseconds
+    return_timings (bool): If True, return timing information
+
+    Returns:
+    list[AudioSamples] or tuple[list[AudioSamples], list[tuple[float, float]]]
+
+    Example:
+    # Split at 3s and 5s with 1s overlap
+    chunks = break_into_chunks(audio, mode='split_by_time', split_points=[3000, 5000], overlap=1000)
+    # Creates chunks: [0-3500ms], [2500-5500ms], [4500-end]
+    """
+    if not isinstance(split_points, (list, tuple)):
+        raise ValueError("split_points must be a list or tuple")
+
+    if overlap < 0:
+        raise ValueError("overlap must be non-negative")
+
+    audio_length_samples = audio.audio_data.shape[1]
+    audio_length_ms = audio_length_samples * 1000 / audio.sample_rate
+
+    # Convert everything to samples
+    split_points_samples = [int(sp * audio.sample_rate / 1000) for sp in split_points]
+    overlap_samples = int(overlap * audio.sample_rate / 1000)
+
+    # Sort split points and remove duplicates
+    split_points_samples = sorted(set(split_points_samples))
+
+    # Validate split points
+    for sp in split_points_samples:
+        if sp < 0 or sp > audio_length_samples:
+            raise ValueError(f"Split point {sp} samples is outside audio range [0, {audio_length_samples}]")
+
+    # Build segment boundaries: [0, split1, split2, ..., end]
+    boundaries = [0] + split_points_samples + [audio_length_samples]
+
+    # Calculate overlap extension (half on each side of split point)
+    half_overlap = overlap_samples // 2
+
+    chunks = []
+    timings = []
+
+    for i in range(len(boundaries) - 1):
+        # Base segment boundaries
+        segment_start = boundaries[i]
+        segment_end = boundaries[i + 1]
+
+        # Extend boundaries for overlap (except at audio edges)
+        if i > 0:  # Not the first chunk
+            chunk_start = max(0, segment_start - half_overlap)
+        else:
+            chunk_start = segment_start
+
+        if i < len(boundaries) - 2:  # Not the last chunk
+            chunk_end = min(audio_length_samples, segment_end + half_overlap)
+        else:
+            chunk_end = segment_end
+
+        # Extract chunk
+        chunk = audio.audio_data[:, chunk_start:chunk_end]
+
+        # Apply fades (maintains device)
+        chunk = _apply_chunk_fades(chunk, fade_duration, audio.sample_rate, audio.device)
+        chunks.append(AudioSamples(chunk, audio.sample_rate))
+
+        # Timing info in seconds
+        start_sec = chunk_start / audio.sample_rate
+        end_sec = chunk_end / audio.sample_rate
+        timings.append((start_sec, end_sec))
+
+    if return_timings:
+        return chunks, timings
+    return chunks
+
+
 def break_into_chunks(audio: AudioSamples, mode='exact_count', fade_duration=50, return_timings=False, **kwargs):
     """
     Break audio into chunks using different strategies.
-    
+
     Parameters:
     audio (AudioSamples): Audio object to process
-    mode (str): Chunking strategy - 'exact_count', 'min_overlap', or 'max_overlap'
+    mode (str): Chunking strategy - 'exact_count', 'min_overlap', 'max_overlap', or 'split_by_time'
     fade_duration (int): Duration of fade in/out in milliseconds (default: 50)
     return_timings (bool): If True, return (chunks, timings) tuple instead of just chunks
     **kwargs: Mode-specific parameters
-    
+
     Mode-specific parameters:
     - 'exact_count': chunk_count (int), chunk_duration (int in ms)
     - 'min_overlap': chunk_duration (int in ms), min_overlap (int in ms)
     - 'max_overlap': chunk_duration (int in ms), max_overlap (int in ms)
-    
+    - 'split_by_time': split_points (list in ms), overlap (int in ms, default 0)
+
     Returns:
     list[AudioSamples] OR tuple[list[AudioSamples], list[tuple[float, float]]]:
         If return_timings=False: List of audio chunks
         If return_timings=True: (chunks, timings) where timings is [(start_sec, end_sec), ...]
-    
+
     Examples:
     # Create exactly 5 chunks of 4000ms each
     chunks = break_into_chunks(audio, mode='exact_count', chunk_count=5, chunk_duration=4000)
-    
+
     # Create chunks with timing info
     chunks, timings = break_into_chunks(audio, mode='min_overlap', chunk_duration=4000, min_overlap=2000, return_timings=True)
     print(f"Chunk 1: {timings[0][0]:.1f}s to {timings[0][1]:.1f}s")
+
+    # Split at specific times with overlap
+    chunks = break_into_chunks(audio, mode='split_by_time', split_points=[3000, 5000], overlap=1000)
     """
     if mode == 'exact_count':
         chunk_count = kwargs.get('chunk_count')
         chunk_duration = kwargs.get('chunk_duration')
-        
+
         if chunk_count is None or chunk_duration is None:
             raise ValueError("mode='exact_count' requires 'chunk_count' and 'chunk_duration' parameters")
-        
+
         result = _break_into_chunks_exact_count(audio, chunk_count, chunk_duration, fade_duration, return_timings)
-    
+
     elif mode == 'min_overlap':
         chunk_duration = kwargs.get('chunk_duration', 4000)
         min_overlap = kwargs.get('min_overlap', 0)
-        
+
         result = _break_into_chunks_min_overlap(audio, chunk_duration, min_overlap, fade_duration, return_timings)
-    
+
     elif mode == 'max_overlap':
         chunk_duration = kwargs.get('chunk_duration', 4000)
         max_overlap = kwargs.get('max_overlap', 0)
-        
+
         result = _break_into_chunks_max_overlap(audio, chunk_duration, max_overlap, fade_duration, return_timings)
-    
+
+    elif mode == 'split_by_time':
+        split_points = kwargs.get('split_points')
+        if split_points is None:
+            raise ValueError("mode='split_by_time' requires 'split_points' parameter")
+
+        overlap = kwargs.get('overlap', 0)
+
+        result = _break_into_chunks_split_by_time(audio, split_points, overlap, fade_duration, return_timings)
+
     else:
-        raise ValueError(f"Unknown mode '{mode}'. Supported modes: 'exact_count', 'min_overlap', 'max_overlap'")
-    
+        raise ValueError(f"Unknown mode '{mode}'. Supported modes: 'exact_count', 'min_overlap', 'max_overlap', 'split_by_time'")
+
     return result
 
 
