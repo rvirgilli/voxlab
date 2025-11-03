@@ -1316,4 +1316,202 @@ class TestBreakIntoChunksSplitByTime:
         overlap = timings[0][1] - timings[1][0]
         assert abs(overlap - 1.0) < 0.05  # Allow some tolerance for rounding
 
+    def test_extract_intervals_basic(self):
+        """Test basic extract_intervals functionality."""
+        audio = generate_sine_wave_audio(duration_sec=10.0, sample_rate=16000, channels=1)
+
+        intervals = [[1000, 3000], [5000, 8000]]
+        chunks = break_into_chunks(audio, mode='extract_intervals', intervals=intervals)
+
+        assert len(chunks) == 2
+        assert chunks[0].duration == 2.0
+        assert chunks[1].duration == 3.0
+        assert all(isinstance(c, AudioSamples) for c in chunks)
+
+    def test_extract_intervals_with_timings(self):
+        """Test extract_intervals with return_timings=True."""
+        audio = generate_sine_wave_audio(duration_sec=10.0, sample_rate=16000, channels=1)
+
+        intervals = [[1000, 3000], [5000, 7000]]
+        chunks, timings = break_into_chunks(audio, mode='extract_intervals',
+                                           intervals=intervals,
+                                           return_timings=True)
+
+        assert len(chunks) == 2
+        assert len(timings) == 2
+        assert abs(timings[0][0] - 1.0) < 0.01
+        assert abs(timings[0][1] - 3.0) < 0.01
+        assert abs(timings[1][0] - 5.0) < 0.01
+        assert abs(timings[1][1] - 7.0) < 0.01
+
+    def test_extract_intervals_non_contiguous(self):
+        """Test extracting non-contiguous intervals (with gaps)."""
+        audio = generate_sine_wave_audio(duration_sec=10.0, sample_rate=16000, channels=1)
+
+        intervals = [[500, 1000], [3000, 4000], [7000, 9000]]
+        chunks = break_into_chunks(audio, mode='extract_intervals', intervals=intervals)
+
+        assert len(chunks) == 3
+        assert abs(chunks[0].duration - 0.5) < 0.01
+        assert abs(chunks[1].duration - 1.0) < 0.01
+        assert abs(chunks[2].duration - 2.0) < 0.01
+
+    def test_extract_intervals_overlapping(self):
+        """Test extracting overlapping intervals."""
+        audio = generate_sine_wave_audio(duration_sec=10.0, sample_rate=16000, channels=1)
+
+        intervals = [[1000, 4000], [3000, 6000], [5000, 8000]]
+        chunks = break_into_chunks(audio, mode='extract_intervals', intervals=intervals)
+
+        assert len(chunks) == 3
+        assert all(isinstance(c, AudioSamples) for c in chunks)
+        assert chunks[0].duration == 3.0
+        assert chunks[1].duration == 3.0
+        assert chunks[2].duration == 3.0
+
+    def test_extract_intervals_single_interval(self):
+        """Test extracting a single interval."""
+        audio = generate_sine_wave_audio(duration_sec=10.0, sample_rate=16000, channels=1)
+
+        chunks = break_into_chunks(audio, mode='extract_intervals', intervals=[[2000, 5000]])
+
+        assert len(chunks) == 1
+        assert abs(chunks[0].duration - 3.0) < 0.01
+
+    def test_extract_intervals_empty_list(self):
+        """Test extract_intervals with empty intervals list."""
+        audio = generate_sine_wave_audio(duration_sec=5.0, sample_rate=16000, channels=1)
+
+        chunks = break_into_chunks(audio, mode='extract_intervals', intervals=[])
+
+        assert len(chunks) == 0
+        assert isinstance(chunks, list)
+
+    def test_extract_intervals_exceeds_audio_end(self):
+        """Test extract_intervals with interval exceeding audio length."""
+        audio = generate_sine_wave_audio(duration_sec=5.0, sample_rate=16000, channels=1)
+
+        intervals = [[3000, 7000]]
+
+        with pytest.raises(ValueError, match="exceeds audio length"):
+            break_into_chunks(audio, mode='extract_intervals', intervals=intervals)
+
+    def test_extract_intervals_start_beyond_audio(self):
+        """Test extract_intervals with interval starting beyond audio."""
+        audio = generate_sine_wave_audio(duration_sec=5.0, sample_rate=16000, channels=1)
+
+        intervals = [[6000, 8000]]
+
+        with pytest.raises(ValueError, match="is beyond audio length"):
+            break_into_chunks(audio, mode='extract_intervals', intervals=intervals)
+
+    def test_extract_intervals_invalid_interval_format(self):
+        """Test extract_intervals with invalid interval format."""
+        audio = generate_sine_wave_audio(duration_sec=5.0, sample_rate=16000, channels=1)
+
+        with pytest.raises(ValueError, match="must be a \\[start_ms, end_ms\\] pair"):
+            break_into_chunks(audio, mode='extract_intervals', intervals=[[1000, 2000, 3000]])
+
+        with pytest.raises(ValueError, match="must be a \\[start_ms, end_ms\\] pair"):
+            break_into_chunks(audio, mode='extract_intervals', intervals=[[1000]])
+
+        with pytest.raises(ValueError, match="must be a \\[start_ms, end_ms\\] pair"):
+            break_into_chunks(audio, mode='extract_intervals', intervals=[1000, 2000])
+
+    def test_extract_intervals_negative_start(self):
+        """Test extract_intervals with negative start time."""
+        audio = generate_sine_wave_audio(duration_sec=5.0, sample_rate=16000, channels=1)
+
+        with pytest.raises(ValueError, match="cannot be negative"):
+            break_into_chunks(audio, mode='extract_intervals', intervals=[[-500, 2000]])
+
+    def test_extract_intervals_invalid_range(self):
+        """Test extract_intervals with end <= start."""
+        audio = generate_sine_wave_audio(duration_sec=5.0, sample_rate=16000, channels=1)
+
+        with pytest.raises(ValueError, match="must be greater than start time"):
+            break_into_chunks(audio, mode='extract_intervals', intervals=[[3000, 2000]])
+
+        with pytest.raises(ValueError, match="must be greater than start time"):
+            break_into_chunks(audio, mode='extract_intervals', intervals=[[2000, 2000]])
+
+    def test_extract_intervals_missing_parameter(self):
+        """Test extract_intervals without intervals parameter."""
+        audio = generate_sine_wave_audio(duration_sec=5.0, sample_rate=16000, channels=1)
+
+        with pytest.raises(ValueError, match="requires 'intervals' parameter"):
+            break_into_chunks(audio, mode='extract_intervals')
+
+    def test_extract_intervals_invalid_type(self):
+        """Test extract_intervals with non-list intervals."""
+        audio = generate_sine_wave_audio(duration_sec=5.0, sample_rate=16000, channels=1)
+
+        with pytest.raises(ValueError, match="must be a list or tuple"):
+            break_into_chunks(audio, mode='extract_intervals', intervals="not a list")
+
+    def test_extract_intervals_stereo(self):
+        """Test extract_intervals with stereo audio."""
+        audio = generate_sine_wave_audio(duration_sec=10.0, sample_rate=16000, channels=2)
+
+        intervals = [[1000, 3000], [5000, 7000]]
+        chunks = break_into_chunks(audio, mode='extract_intervals', intervals=intervals)
+
+        assert len(chunks) == 2
+        assert chunks[0].audio_data.shape[0] == 2
+        assert chunks[1].audio_data.shape[0] == 2
+        assert chunks[0].duration == 2.0
+        assert chunks[1].duration == 2.0
+
+    def test_extract_intervals_device_preservation(self):
+        """Test extract_intervals preserves device."""
+        audio = generate_sine_wave_audio(duration_sec=5.0, sample_rate=16000, channels=1)
+        original_device = audio.device
+
+        intervals = [[1000, 3000], [4000, 5000]]
+        chunks = break_into_chunks(audio, mode='extract_intervals', intervals=intervals)
+
+        assert all(c.device == original_device for c in chunks)
+
+    def test_extract_intervals_different_sample_rates(self):
+        """Test extract_intervals with different sample rates."""
+        for sample_rate in [8000, 16000, 44100]:
+            audio = generate_sine_wave_audio(duration_sec=5.0, sample_rate=sample_rate, channels=1)
+
+            intervals = [[500, 1500], [2000, 3000]]
+            chunks = break_into_chunks(audio, mode='extract_intervals', intervals=intervals)
+
+            assert len(chunks) == 2
+            assert all(c.sample_rate == sample_rate for c in chunks)
+            assert abs(chunks[0].duration - 1.0) < 0.01
+            assert abs(chunks[1].duration - 1.0) < 0.01
+
+    def test_extract_intervals_precise_boundaries(self):
+        """Test extract_intervals respects exact boundaries."""
+        audio = generate_sine_wave_audio(duration_sec=10.0, sample_rate=16000, channels=1)
+
+        intervals = [[0, 1000], [1000, 2000], [9000, 10000]]
+        chunks, timings = break_into_chunks(audio, mode='extract_intervals',
+                                           intervals=intervals,
+                                           return_timings=True)
+
+        assert len(chunks) == 3
+        assert abs(timings[0][0] - 0.0) < 0.01
+        assert abs(timings[0][1] - 1.0) < 0.01
+        assert abs(timings[1][0] - 1.0) < 0.01
+        assert abs(timings[1][1] - 2.0) < 0.01
+        assert abs(timings[2][0] - 9.0) < 0.01
+        assert abs(timings[2][1] - 10.0) < 0.01
+
+    def test_extract_intervals_custom_fade_duration(self):
+        """Test extract_intervals with custom fade duration."""
+        audio = generate_sine_wave_audio(duration_sec=5.0, sample_rate=16000, channels=1)
+
+        intervals = [[1000, 3000]]
+        chunks = break_into_chunks(audio, mode='extract_intervals',
+                                  intervals=intervals,
+                                  fade_duration=100)
+
+        assert len(chunks) == 1
+        assert abs(chunks[0].duration - 2.0) < 0.01
+
 

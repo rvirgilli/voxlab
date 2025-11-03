@@ -16,12 +16,12 @@ A comprehensive Python toolbox for audio processing using PyTorch. VoxLab provid
 
 ### CUDA Installation (Recommended)
 ```bash
-# Create conda environment with Python 3.11.13
-conda create -n voxlab python=3.11.13 -y
+# Create conda environment with Python 3.11
+conda create -n voxlab python=3.11 -y
 conda activate voxlab
 
-# Install PyTorch with CUDA 12.6 support
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu126
+# Install PyTorch with CUDA 12.9 support
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu129
 
 # Install in editable mode
 pip install -e .
@@ -41,8 +41,8 @@ pip install -e .
 from voxlab.core.audio_samples import AudioSamples
 from voxlab.preprocessing.functions import resample_audio, convert_to_mono
 
-# Load and process audio (supports wav, mp3, ogg, flac, webm)
-audio = AudioSamples.load("input.webm")  # WebM files supported!
+# Load and process audio (supports wav, mp3, ogg, flac, webm, mp4)
+audio = AudioSamples.load("input.webm")  # WebM and MP4 files supported!
 audio = resample_audio(audio, 16000, inplace=True)  # Memory efficient
 audio = convert_to_mono(audio, method='left', inplace=True)
 audio.export("output.wav")
@@ -235,11 +235,11 @@ pytest tests/ -v
 ## Requirements
 
 ### Core Dependencies
-- Python >= 3.11.13
+- Python >= 3.11
 - PyTorch >= 2.8.0 (with torchaudio)
 - scipy >= 1.16.2
 - numpy >= 2.1.2
-- librosa >= 0.10.0 (for WebM support)
+- librosa >= 0.10.0 (for WebM and MP4 support)
 - pytest >= 8.4.2 (for testing)
 
 <!-- ### ML Dependencies (Coming Soon)

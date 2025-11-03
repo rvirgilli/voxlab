@@ -6,7 +6,7 @@ with open('voxlab/requirements.txt') as f:
 
 setup(
     name='voxlab',
-    version='0.3.6',
+    version='0.3.7',
     packages=find_packages(),
     install_requires=requirements,
     entry_points={
@@ -32,5 +32,5 @@ setup(
         'Operating System :: OS Independent',
     ],
     keywords='audio processing, pytorch, torchaudio, signal processing, gpu acceleration',
-    python_requires='>=3.11.13',
+    python_requires='>=3.11',
 )
